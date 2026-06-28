@@ -1,0 +1,27 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# Environment configurations (credentials)
+.env
+.env.*
+
+# Uploads and Outputs directories
+uploads/
+outputs/
+
+# Document templates/scratch outputs
+*.docx
+*.pdf
+scratch_output.*
+
+# OS files
+.DS_Store
+Thumbs.db

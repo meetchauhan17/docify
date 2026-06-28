@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Docify AI — Handwriting to Document Converter</title>
+    <meta name="description" content="Convert handwritten notes into perfectly formatted Word & PDF documents instantly. AI-powered OCR with auto-detect formatting.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/landing.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <div class="phosphor-vignette"></div>
+
+    <!-- NAV -->
+    <nav class="navbar" id="navbar">
+        <div class="nav-inner">
+            <a href="/" class="nav-logo">
+                <i data-lucide="file-text"></i>
+                <span>Docify <strong>AI</strong></span>
+            </a>
+            <div class="nav-links">
+                <a href="/" class="nav-link active">Home</a>
+                <a href="/convert" class="nav-link">Convert</a>
+                <a href="/history" class="nav-link">History</a>
+                <a href="/about" class="nav-link">About</a>
+            </div>
+            <div class="nav-actions">
+                <a href="/login" class="nav-link">
+                    [ LOGIN ]
+                </a>
+                <a href="/convert" class="btn btn-primary cyber-glitch" data-text="INIT_CONVERT">INIT_CONVERT</a>
+            </div>
+            <button class="nav-hamburger" id="nav-hamburger" aria-label="Menu">
+                <i data-lucide="menu"></i>
+            </button>
+        </div>
+        <div class="nav-mobile" id="nav-mobile">
+            <a href="/" class="nav-link">Home</a>
+            <a href="/convert" class="nav-link">Convert</a>
+            <a href="/history" class="nav-link">History</a>
+            <a href="/about" class="nav-link">About</a>
+            <a href="/login" class="nav-link">Login</a>
+        </div>
+    </nav>
+
+    <!-- HERO -->
+    <section class="hero">
+        <div class="hero-badge">
+            <i data-lucide="terminal"></i>
+            <span>[ SYSTEM ONLINE ]</span>
+        </div>
+        <h1 class="hero-title rgb-shift" data-text="DOCIFY_AI">DOCIFY_AI</h1>
+        <h2 style="font-size: 2rem; color: var(--foreground); margin-bottom: 1rem; font-family: var(--font-heading); text-transform: uppercase;">
+            Turn your <span class="accent-text" id="typewriter">handwriting</span> into data.
+        </h2>
+        <p class="hero-subtitle">
+            Upload a photo or scanned PDF of your handwritten notes. Neural nets extract text & replicate formatting.
+        </p>
+        <div class="hero-actions">
+            <a href="/convert" class="btn btn-primary cyber-glitch" data-text="OVERRIDE_DOCUMENT">
+                <i data-lucide="upload-cloud"></i> OVERRIDE_DOCUMENT
+            </a>
+            <a href="/about" class="btn btn-outline">
+                <i data-lucide="terminal-square"></i> VIEW_LOGS
+            </a>
+        </div>
+        <div class="hero-stats">
+            <div class="stat-item">
+                <span class="stat-num" data-target="2400">0</span>
+                <span class="stat-label">Documents Converted</span>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat-item">
+                <span class="stat-num" data-target="99">0</span><span class="stat-pct">%</span>
+                <span class="stat-label">OCR Accuracy</span>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat-item">
+                <span class="stat-num" data-target="15">0</span><span class="stat-pct">s</span>
+                <span class="stat-label">Avg. Conversion Time</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- HOW IT WORKS -->
+    <section class="section" id="how-it-works">
+        <div class="section-inner">
+            <div class="section-header">
+                <div class="section-badge"><i data-lucide="workflow"></i> Process</div>
+                <h2 class="section-title">How it works</h2>
+                <p class="section-desc">Three simple steps from handwriting to a polished document</p>
+            </div>
+            <div class="steps-grid">
+                <div class="step-card">
+                    <div class="step-num">01</div>
+                    <div class="step-icon-wrap"><i data-lucide="upload-cloud" class="step-icon"></i></div>
+                    <h3>UPLOAD_DATA</h3>
+                    <p>Drag & drop handwriting photo (PNG, JPG) or scanned multi-page PDF.</p>
+                </div>
+                <div class="step-card">
+                    <div class="step-num">02</div>
+                    <div class="step-icon-wrap"><i data-lucide="cpu" class="step-icon"></i></div>
+                    <h3>NEURAL_ANALYSIS</h3>
+                    <p>Gemini AI transcribes words and detects formatting — font, spacing, indentation.</p>
+                </div>
+                <div class="step-card">
+                    <div class="step-num">03</div>
+                    <div class="step-icon-wrap"><i data-lucide="download" class="step-icon"></i></div>
+                    <h3>Download Your Doc</h3>
+                    <p>Get a perfectly formatted Word (.docx) or PDF file, ready to submit or share.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section class="section section-alt">
+        <div class="section-inner">
+            <div class="section-header">
+                <div class="section-badge"><i data-lucide="wand-2"></i> Features</div>
+                <h2 class="section-title">Everything you need</h2>
+                <p class="section-desc">Built for students, professionals, and anyone with handwritten notes</p>
+            </div>
+            <div class="features-big-grid">
+                <div class="feat-big-card feat-primary">
+                    <i data-lucide="sparkles" class="feat-big-icon"></i>
+                    <h3>Auto-Detect Formatting</h3>
+                    <p>AI reads your handwriting and automatically replicates font size, line spacing, indentation, and text alignment — no manual configuration needed.</p>
+                    <div class="feat-tags">
+                        <span>Font Size</span><span>Line Spacing</span><span>Indentation</span><span>Alignment</span>
+                    </div>
+                </div>
+                <div class="feat-big-card">
+                    <i data-lucide="sliders" class="feat-big-icon"></i>
+                    <h3>Manual Override</h3>
+                    <p>Take full control — choose font family, size, margins, bold, italic, underline, and text alignment yourself.</p>
+                </div>
+                <div class="feat-big-card">
+                    <i data-lucide="layers" class="feat-big-icon"></i>
+                    <h3>Multi-Page PDFs</h3>
+                    <p>Each page is processed individually with its own detected formatting. Upload entire notebooks at once.</p>
+                </div>
+                <div class="feat-big-card">
+                    <i data-lucide="table" class="feat-big-icon"></i>
+                    <h3>Native Tables</h3>
+                    <p>Detects handwritten tables and converts them to editable, properly formatted table structures in the output.</p>
+                </div>
+                <div class="feat-big-card">
+                    <i data-lucide="image" class="feat-big-icon"></i>
+                    <h3>Drawing Preservation</h3>
+                    <p>Diagrams, sketches, and drawings are cropped and embedded at their correct position in the output document.</p>
+                </div>
+                <div class="feat-big-card">
+                    <i data-lucide="zap" class="feat-big-icon"></i>
+                    <h3>Lightning Fast</h3>
+                    <p>Average conversion completes in 15–30 seconds. Powered by Google's Gemini 2.5 Flash model.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA BANNER -->
+    <section class="section">
+        <div class="cta-banner">
+            <i data-lucide="terminal" class="cta-icon"></i>
+            <div class="cta-text">
+                <h2 style="font-family: var(--font-heading); text-transform: uppercase;">AWAITING_INPUT... <span class="blink">_</span></h2>
+                <p>No account needed. Upload, convert, download — all in under 30 seconds.</p>
+            </div>
+            <a href="/convert" class="btn btn-primary cyber-glitch" data-text="EXECUTE">
+                <i data-lucide="power"></i>
+                EXECUTE
+            </a>
+        </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer class="footer">
+        <div class="footer-inner">
+            <div class="footer-logo">
+                <i data-lucide="file-text"></i>
+                <span>Docify <strong>AI</strong></span>
+            </div>
+            <div class="footer-links">
+                <a href="/">Home</a>
+                <a href="/convert">Convert</a>
+                <a href="/history">History</a>
+                <a href="/about">About</a>
+                <a href="/login">Login</a>
+            </div>
+            <p class="footer-copy label-text">© 2026 // ALL RIGHTS RESERVED</p>
+        </div>
+    </footer>
+
+    <script src="/static/js/theme.js"></script>
+    <script src="/static/js/landing.js"></script>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

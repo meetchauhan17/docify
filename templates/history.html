@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conversion History — Docify AI</title>
+    <meta name="description" content="View your recent Docify AI document conversions.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/landing.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <div class="phosphor-vignette"></div>
+
+    <!-- NAV -->
+    <nav class="navbar" id="navbar">
+        <div class="nav-inner">
+            <a href="/" class="nav-logo">
+                <i data-lucide="file-text"></i>
+                <span>Docify <strong>AI</strong></span>
+            </a>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/convert" class="nav-link">Convert</a>
+                <a href="/history" class="nav-link active">History</a>
+                <a href="/about" class="nav-link">About</a>
+            </div>
+            <div class="nav-actions">
+                <a href="/login" class="nav-link" id="nav-login-link">
+                    [ LOGIN ]
+                </a>
+            </div>
+            <button class="nav-hamburger" id="nav-hamburger" aria-label="Menu">
+                <i data-lucide="menu"></i>
+            </button>
+        </div>
+        <div class="nav-mobile" id="nav-mobile">
+            <a href="/" class="nav-link">Home</a>
+            <a href="/convert" class="nav-link">Convert</a>
+            <a href="/history" class="nav-link">History</a>
+            <a href="/about" class="nav-link">About</a>
+            <a href="/login" class="nav-link">Login</a>
+        </div>
+    </nav>
+
+    <!-- PAGE CONTENT -->
+    <main class="page-main" style="max-width: 1000px; margin: 6rem auto 4rem;">
+        <div class="page-header">
+            <div class="page-header-left">
+                <div class="section-badge"><i data-lucide="history"></i> DATA_LOGS</div>
+                <h1 class="page-title" style="font-family: var(--font-heading); color: var(--accent);">LOCAL_HISTORY</h1>
+                <p class="page-subtitle" style="color: var(--muted-foreground);">Your recent system conversions, stored in local storage cache.</p>
+            </div>
+            <div class="page-header-right">
+                <button id="clear-history-btn" class="btn btn-danger" title="PURGE LOGS">
+                    <i data-lucide="trash-2"></i> PURGE_LOGS
+                </button>
+                <a href="/convert" class="btn btn-primary">
+                    <i data-lucide="plus"></i> NEW_ENTRY
+                </a>
+            </div>
+        </div>
+
+        <!-- FILTER BAR -->
+        <div class="filter-bar" id="filter-bar">
+            <div class="filter-search">
+                <i data-lucide="search"></i>
+                <input type="text" id="history-search" placeholder="Search by filename..." class="filter-input">
+            </div>
+            <div class="filter-pills">
+                <button class="filter-pill active" data-filter="all">All</button>
+                <button class="filter-pill" data-filter="docx">
+                    <i data-lucide="file-text"></i> Word
+                </button>
+                <button class="filter-pill" data-filter="pdf">
+                    <i data-lucide="file"></i> PDF
+                </button>
+            </div>
+            <div class="history-count">
+                <span id="history-count-text">0 conversions</span>
+            </div>
+        </div>
+
+        <!-- HISTORY GRID -->
+        <div class="history-grid" id="history-grid">
+            <!-- Populated by JS -->
+        </div>
+
+        <!-- EMPTY STATE -->
+        <div class="empty-state" id="empty-state" style="border-style: solid;">
+            <div class="empty-icon-wrap" style="background: rgba(0,255,136,0.1); border: 1px solid var(--accent);">
+                <i data-lucide="inbox" class="empty-icon"></i>
+            </div>
+            <h2 style="font-family: var(--font-heading);">NO_DATA_FOUND</h2>
+            <p>Convert your first handwritten document and it will appear in the local cache.</p>
+            <a href="/convert" class="btn btn-primary cyber-glitch" data-text="INIT_CONVERT">
+                <i data-lucide="upload-cloud"></i>
+                INIT_CONVERT
+            </a>
+        </div>
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="footer">
+        <div class="footer-inner">
+            <div class="footer-logo">
+                <i data-lucide="file-text"></i>
+                <span>Docify <strong>AI</strong></span>
+            </div>
+            <div class="footer-links">
+                <a href="/">Home</a>
+                <a href="/convert">Convert</a>
+                <a href="/history">History</a>
+                <a href="/about">About</a>
+            </div>
+            <p class="footer-copy label-text">© 2026 // ALL RIGHTS RESERVED</p>
+        </div>
+    </footer>
+
+    <script src="/static/js/theme.js"></script>
+    <script src="/static/js/history.js"></script>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

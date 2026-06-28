@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How It Works — Docify AI</title>
+    <meta name="description" content="Learn how Docify AI converts handwritten notes into perfectly formatted Word and PDF documents using Gemini AI.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/landing.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <div class="phosphor-vignette"></div>
+
+    <!-- NAV -->
+    <nav class="navbar" id="navbar">
+        <div class="nav-inner">
+            <a href="/" class="nav-logo">
+                <i data-lucide="file-text"></i>
+                <span>Docify <strong>AI</strong></span>
+            </a>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/convert" class="nav-link">Convert</a>
+                <a href="/history" class="nav-link">History</a>
+                <a href="/about" class="nav-link active">About</a>
+            </div>
+            <div class="nav-actions">
+                <a href="/login" class="nav-link" id="nav-login-link">
+                    [ LOGIN ]
+                </a>
+            </div>
+            <button class="nav-hamburger" id="nav-hamburger" aria-label="Menu">
+                <i data-lucide="menu"></i>
+            </button>
+        </div>
+        <div class="nav-mobile" id="nav-mobile">
+            <a href="/" class="nav-link">Home</a>
+            <a href="/convert" class="nav-link">Convert</a>
+            <a href="/history" class="nav-link">History</a>
+            <a href="/about" class="nav-link">About</a>
+            <a href="/login" class="nav-link">Login</a>
+        </div>
+    </nav>
+
+    <!-- PAGE MAIN -->
+    <main class="page-main">
+      <div class="about-main">
+
+        <!-- HERO SECTION -->
+        <div class="about-hero">
+            <div class="section-badge"><i data-lucide="info"></i> ABOUT_SYSTEM</div>
+            <h1 class="page-title" style="font-family: var(--font-heading); color: var(--foreground); text-transform: uppercase;">System Architecture</h1>
+            <p class="page-subtitle">A deep dive into the neural pipeline that overrides handwriting into structured data.</p>
+        </div>
+
+        <!-- PIPELINE STEPS -->
+        <section class="pipeline-section">
+            <h2 class="about-section-title">The AI Pipeline</h2>
+            <div class="pipeline-track">
+                <div class="pipeline-step reveal" id="pipe-1">
+                    <div class="pipe-step-num">01</div>
+                    <div class="pipe-step-content">
+                        <div class="pipe-step-icon-wrap">
+                            <i data-lucide="upload-cloud" class="pipe-step-icon"></i>
+                        </div>
+                        <div class="pipe-step-info">
+                            <h3>Upload & Preprocess</h3>
+                            <p>Your file (PNG, JPG, or multi-page PDF) is received. Images are upscaled to minimum 1600px, auto-contrast adjusted, contrast boosted 1.6×, and sharpened for maximum OCR accuracy.</p>
+                            <div class="pipe-tags">
+                                <span>Auto-contrast</span><span>Upscale 1600px</span><span>Sharpening</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pipeline-connector"><i data-lucide="chevrons-down"></i></div>
+
+                <div class="pipeline-step reveal" id="pipe-2">
+                    <div class="pipe-step-num">02</div>
+                    <div class="pipe-step-content">
+                        <div class="pipe-step-icon-wrap">
+                            <i data-lucide="scan-text" class="pipe-step-icon"></i>
+                        </div>
+                        <div class="pipe-step-info">
+                            <h3>Step 1 — High-Accuracy OCR</h3>
+                            <p>Gemini 2.5 Flash receives a specialized prompt to transcribe every word with 100% fidelity — preserving capitalisation, punctuation, symbols, fractions, and subscripts. Each line is tagged with a semantic prefix: HEADING, SUBHEAD, BODY, BULLET, CENTER, UNDERLN, or TABLE.</p>
+                            <div class="pipe-tags">
+                                <span>Gemini 2.5 Flash</span><span>Semantic Tagging</span><span>Table Detection</span><span>Math Symbols</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pipeline-connector"><i data-lucide="chevrons-down"></i></div>
+
+                <div class="pipeline-step reveal" id="pipe-3">
+                    <div class="pipe-step-num">03</div>
+                    <div class="pipe-step-content">
+                        <div class="pipe-step-icon-wrap">
+                            <i data-lucide="layout" class="pipe-step-icon"></i>
+                        </div>
+                        <div class="pipe-step-info">
+                            <h3>Step 2 — Layout & Drawing Detection</h3>
+                            <p>A second Gemini call analyses the original image for page margins, line spacing, and all non-text visual regions: diagrams, graphs, sketches, arrows, and brackets — each with a normalised bounding box and description.</p>
+                            <div class="pipe-tags">
+                                <span>Margin Detection</span><span>Line Spacing</span><span>Arrow/Bracket ID</span><span>Drawing BBox</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pipeline-connector"><i data-lucide="chevrons-down"></i></div>
+
+                <div class="pipeline-step reveal" id="pipe-4">
+                    <div class="pipe-step-num">04</div>
+                    <div class="pipe-step-content">
+                        <div class="pipe-step-icon-wrap">
+                            <i data-lucide="merge" class="pipe-step-icon"></i>
+                        </div>
+                        <div class="pipe-step-info">
+                            <h3>Merge & Position</h3>
+                            <p>Text elements and drawings are merged into a single ordered flow using Y-position fractions. Simple arrows become Unicode characters (⟶ ↗ ↙). Simple brackets become [ ] or { }. Complex drawings are cropped and embedded inline.</p>
+                            <div class="pipe-tags">
+                                <span>Y-Position Merge</span><span>Unicode Arrows</span><span>Inline Images</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pipeline-connector"><i data-lucide="chevrons-down"></i></div>
+
+                <div class="pipeline-step reveal" id="pipe-5">
+                    <div class="pipe-step-num">05</div>
+                    <div class="pipe-step-content">
+                        <div class="pipe-step-icon-wrap">
+                            <i data-lucide="download" class="pipe-step-icon"></i>
+                        </div>
+                        <div class="pipe-step-info">
+                            <h3>Generate Output</h3>
+                            <p>The final document is built: Word (.docx) using python-docx with per-paragraph formatting, or PDF using ReportLab with native text rendering. Tables, images, and drawings are embedded at their correct positions. You get an instant download.</p>
+                            <div class="pipe-tags">
+                                <span>python-docx</span><span>ReportLab</span><span>Native Tables</span><span>Instant Download</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="detects-section">
+            <h2 class="about-section-title" style="font-family: var(--font-heading); color: var(--accent);">NEURAL_DETECTION_CAPABILITIES</h2>
+            <div class="detects-grid">
+                <div class="detect-card reveal">
+                    <i data-lucide="zoom-in" class="detect-card-icon"></i>
+                    <h4>Font Size</h4>
+                    <p>Headings, subheadings, and body text each get accurately sized based on their visual prominence.</p>
+                </div>
+                <div class="detect-card reveal">
+                    <i data-lucide="align-justify" class="detect-card-icon"></i>
+                    <h4>Line Spacing</h4>
+                    <p>Tight (1.0×), normal (1.15×), airy (1.5×), or double-spaced (2.0×) — matched to the original.</p>
+                </div>
+                <div class="detect-card reveal">
+                    <i data-lucide="indent" class="detect-card-icon"></i>
+                    <h4>Indentation</h4>
+                    <p>Bullet points, nested lists, and paragraph first-line indents are preserved in the output.</p>
+                </div>
+                <div class="detect-card reveal">
+                    <i data-lucide="align-left" class="detect-card-icon"></i>
+                    <h4>Text Alignment</h4>
+                    <p>Left, centered, right, and justified paragraphs are identified and reproduced.</p>
+                </div>
+                <div class="detect-card reveal">
+                    <i data-lucide="bold" class="detect-card-icon"></i>
+                    <h4>Bold / Italic / Underline</h4>
+                    <p>Emphasis markers from the original handwriting are carried into the formatted output.</p>
+                </div>
+                <div class="detect-card reveal">
+                    <i data-lucide="move-horizontal" class="detect-card-icon"></i>
+                    <h4>Page Margins</h4>
+                    <p>Document margins are estimated from the original image and applied uniformly.</p>
+                </div>
+                <div class="detect-card reveal">
+                    <i data-lucide="table" class="detect-card-icon"></i>
+                    <h4>Tables</h4>
+                    <p>Handwritten tables are converted to native editable table structures in Word and PDF.</p>
+                </div>
+                <div class="detect-card reveal">
+                    <i data-lucide="pen-tool" class="detect-card-icon"></i>
+                    <h4>Drawings & Diagrams</h4>
+                    <p>Sketches, graphs, and flowcharts are cropped and embedded at their correct page position.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="tech-section">
+            <h2 class="about-section-title" style="font-family: var(--font-heading); color: var(--accent);">SYSTEM_STACK</h2>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <div class="tech-logo tech-gemini">G</div>
+                    <div class="tech-info">
+                        <h4>Gemini 2.5 Flash</h4>
+                        <p>Google's multimodal AI model for OCR and layout analysis</p>
+                    </div>
+                </div>
+                <div class="tech-card">
+                    <div class="tech-logo tech-fastapi">⚡</div>
+                    <div class="tech-info">
+                        <h4>FastAPI</h4>
+                        <p>High-performance Python web framework for the backend API</p>
+                    </div>
+                </div>
+                <div class="tech-card">
+                    <div class="tech-logo tech-pil">🖼</div>
+                    <div class="tech-info">
+                        <h4>Pillow + pdf2image</h4>
+                        <p>Image preprocessing, upscaling, and PDF page extraction</p>
+                    </div>
+                </div>
+                <div class="tech-card">
+                    <div class="tech-logo tech-docx">📝</div>
+                    <div class="tech-info">
+                        <h4>python-docx</h4>
+                        <p>Native Word document generation with full formatting control</p>
+                    </div>
+                </div>
+                <div class="tech-card">
+                    <div class="tech-logo tech-rl">📄</div>
+                    <div class="tech-info">
+                        <h4>ReportLab</h4>
+                        <p>Professional PDF canvas rendering with precise text positioning</p>
+                    </div>
+                </div>
+                <div class="tech-card">
+                    <div class="tech-logo tech-js">JS</div>
+                    <div class="tech-info">
+                        <h4>Vanilla JS + CSS</h4>
+                        <p>Zero-framework frontend — fast, lightweight, beautiful</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="faq-section">
+            <h2 class="about-section-title" style="font-family: var(--font-heading); color: var(--accent);">DATABASE_QUERY // FAQ</h2>
+            <div class="faq-list">
+                <div class="faq-item">
+                    <button class="faq-q" aria-expanded="false">
+                        <span>What file types can I upload?</span>
+                        <i data-lucide="chevron-down" class="faq-chevron"></i>
+                    </button>
+                    <div class="faq-a">
+                        <p>You can upload PNG, JPG/JPEG images, or multi-page PDF files. For best results, ensure the image is well-lit, in focus, and taken straight-on (not at an angle).</p>
+                    </div>
+                </div>
+                <div class="faq-item">
+                    <button class="faq-q" aria-expanded="false">
+                        <span>How accurate is the OCR?</span>
+                        <i data-lucide="chevron-down" class="faq-chevron"></i>
+                    </button>
+                    <div class="faq-a">
+                        <p>Docify AI uses Gemini 2.5 Flash — one of the most capable vision models available. Accuracy depends on handwriting legibility. Clear, dark ink on white paper typically achieves 95–99% accuracy. Very light pencil or cramped writing may see slightly lower results.</p>
+                    </div>
+                </div>
+                <div class="faq-item">
+                    <button class="faq-q" aria-expanded="false">
+                        <span>Is my data stored on any server?</span>
+                        <i data-lucide="chevron-down" class="faq-chevron"></i>
+                    </button>
+                    <div class="faq-a">
+                        <p>Uploaded files are temporarily stored on the server only for the duration of processing. The output document is generated and served to you immediately. Conversion history is stored only in your browser's localStorage — never on any server.</p>
+                    </div>
+                </div>
+                <div class="faq-item">
+                    <button class="faq-q" aria-expanded="false">
+                        <span>What is the difference between Auto and Manual mode?</span>
+                        <i data-lucide="chevron-down" class="faq-chevron"></i>
+                    </button>
+                    <div class="faq-a">
+                        <p><strong>Auto mode</strong> runs a two-step AI pipeline: first OCR, then layout detection. The AI determines font size, spacing, margins, and alignment from your handwriting. <strong>Manual mode</strong> lets you specify all formatting parameters yourself — font family, size, line spacing, margins, alignment, and bold/italic/underline.</p>
+                    </div>
+                </div>
+                <div class="faq-item">
+                    <button class="faq-q" aria-expanded="false">
+                        <span>Can it handle tables and diagrams?</span>
+                        <i data-lucide="chevron-down" class="faq-chevron"></i>
+                    </button>
+                    <div class="faq-a">
+                        <p>Yes! Tables are detected and converted into native editable tables in Word and PDF. Diagrams, sketches, and flowcharts are cropped from the original image and embedded inline at the correct position in the output document.</p>
+                    </div>
+                </div>
+                <div class="faq-item">
+                    <button class="faq-q" aria-expanded="false">
+                        <span>How long does conversion take?</span>
+                        <i data-lucide="chevron-down" class="faq-chevron"></i>
+                    </button>
+                    <div class="faq-a">
+                        <p>A typical single-page image converts in 15–30 seconds. Multi-page PDFs take proportionally longer — each page is processed individually. On rare occasions, high API load may trigger automatic retries with exponential backoff (2s, 4s, 8s, 16s).</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- CTA -->
+        <section class="section">
+            <div class="cta-banner" style="margin-bottom: 4rem;">
+                <i data-lucide="terminal" class="cta-icon"></i>
+                <div class="cta-text">
+                    <h2 style="font-family: var(--font-heading); text-transform: uppercase;">AWAITING_INPUT... <span class="blink">_</span></h2>
+                    <p>No signup needed. Start converting in seconds.</p>
+                </div>
+                <a href="/convert" class="btn btn-primary cyber-glitch" data-text="EXECUTE">
+                    <i data-lucide="power"></i>
+                    EXECUTE
+                </a>
+            </div>
+        </section>
+      </div><!-- /about-main -->
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="footer">
+        <div class="footer-inner">
+            <div class="footer-logo">
+                <i data-lucide="file-text"></i>
+                <span>Docify <strong>AI</strong></span>
+            </div>
+            <div class="footer-links">
+                <a href="/">Home</a>
+                <a href="/convert">Convert</a>
+                <a href="/history">History</a>
+                <a href="/about">About</a>
+            </div>
+            <p class="footer-copy label-text">© 2026 // ALL RIGHTS RESERVED</p>
+        </div>
+    </footer>
+
+    <script src="/static/js/theme.js"></script>
+    <script src="/static/js/about.js"></script>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

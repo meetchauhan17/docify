@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Docify AI - Handwriting to Document</title>
+    <meta name="description" content="Convert handwritten notes into perfectly formatted Word & PDF documents. AI automatically detects font size, spacing, alignment and indentation from your handwriting.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/landing.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <div class="phosphor-vignette"></div>
+
+    <!-- NAV -->
+    <nav class="navbar" id="navbar">
+        <div class="nav-inner">
+            <a href="/" class="nav-logo">
+                <i data-lucide="file-text"></i>
+                <span>Docify <strong>AI</strong></span>
+            </a>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/convert" class="nav-link active">Convert</a>
+                <a href="/history" class="nav-link">History</a>
+                <a href="/about" class="nav-link">About</a>
+            </div>
+            <div class="nav-actions">
+                <a href="/login" class="nav-link" id="nav-login-link">
+                    [ LOGIN ]
+                </a>
+            </div>
+            <button class="nav-hamburger" id="nav-hamburger" aria-label="Menu">
+                <i data-lucide="menu"></i>
+            </button>
+        </div>
+        <div class="nav-mobile" id="nav-mobile">
+            <a href="/" class="nav-link">Home</a>
+            <a href="/convert" class="nav-link">Convert</a>
+            <a href="/history" class="nav-link">History</a>
+            <a href="/about" class="nav-link">About</a>
+            <a href="/login" class="nav-link">Login</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <header class="header" style="text-align: center; margin-top: 4rem; margin-bottom: 2rem;">
+            <div class="logo" style="display: flex; align-items: center; justify-content: center; gap: 0.5rem; color: var(--accent); font-family: var(--font-heading);">
+                <i data-lucide="terminal" style="width: 32px; height: 32px;"></i>
+                <h1 style="font-size: 3rem;">SYSTEM_OVERRIDE</h1>
+            </div>
+            <p class="subtitle" style="color: var(--muted-foreground); margin-top: 1rem;">Upload handwriting or scanned PDF — neural net reads text &amp; replicates formatting.</p>
+        </header>
+
+        <main class="main-content" style="max-width: 800px; margin: 0 auto; width: 100%;">
+            <div class="card main-panel" style="padding: 2rem;">
+                <form id="upload-form" class="upload-form" enctype="multipart/form-data">
+
+                    <!-- ── DROPZONE ── -->
+                    <div id="dropzone" class="dropzone">
+                        <input type="file" name="file" id="file-input" required class="file-input"
+                               accept="image/png, image/jpeg, image/jpg, application/pdf">
+                        <div class="dropzone-content">
+                            <i data-lucide="upload-cloud" class="upload-icon"></i>
+                            <h3>Drag &amp; drop your file here</h3>
+                            <p>or click to browse (PDF, PNG, JPG)</p>
+                            <div id="file-preview" class="file-preview hidden">
+                                <i data-lucide="file" class="file-icon"></i>
+                                <span id="file-name">filename.png</span>
+                                <button type="button" id="remove-file" class="remove-btn">
+                                    <i data-lucide="x"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ── OUTPUT OPTIONS ── -->
+                    <div class="section-divider">
+                        <span class="section-tag"><i data-lucide="sliders-horizontal"></i> Output Options</span>
+                    </div>
+
+                    <div class="options-container">
+                        <div class="option-group">
+                            <label for="mode" class="option-label">
+                                <i data-lucide="layout"></i> Layout Mode
+                            </label>
+                            <div class="custom-select-wrapper">
+                                <select name="mode" id="mode" class="custom-select">
+                                    <option value="preserve">Preserve Layout (Line Breaks)</option>
+                                    <option value="flow">Flow Text (Continuous Paragraphs)</option>
+                                </select>
+                                <i data-lucide="chevron-down" class="select-icon"></i>
+                            </div>
+                            <p class="option-hint">Preserve is best for notes; Flow for continuous essays.</p>
+                        </div>
+
+                        <div class="option-group">
+                            <label for="outtype" class="option-label">
+                                <i data-lucide="download"></i> Output Format
+                            </label>
+                            <div class="custom-select-wrapper">
+                                <select name="outtype" id="outtype" class="custom-select">
+                                    <option value="docx">Word (.docx)</option>
+                                    <option value="pdf">PDF (.pdf)</option>
+                                </select>
+                                <i data-lucide="chevron-down" class="select-icon"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ── AUTO FORMAT TOGGLE (the key feature) ── -->
+                    <div class="section-divider">
+                        <span class="section-tag"><i data-lucide="wand-2"></i> Formatting Mode</span>
+                    </div>
+
+                    <div class="auto-format-card" id="auto-format-card">
+                        <div class="auto-format-header">
+                            <div class="auto-format-info">
+                                <div class="auto-format-title">
+                                    <i data-lucide="sparkles" class="sparkle-icon"></i>
+                                    <strong>Auto-Detect Formatting</strong>
+                                    <span class="badge-recommended">Recommended</span>
+                                </div>
+                                <p class="auto-format-desc">
+                                    AI reads your handwriting and automatically matches the <strong>font size</strong>,
+                                    <strong>line spacing</strong>, <strong>indentation</strong>, <strong>alignment</strong>,
+                                    and <strong>bold/italic/underline</strong> — just like in the original.
+                                </p>
+                            </div>
+                            <!-- Toggle switch -->
+                            <label class="toggle-switch" for="auto-format-toggle" title="Toggle auto format">
+                                <input type="checkbox" id="auto-format-toggle" name="auto_format" value="true" checked>
+                                <span class="toggle-track">
+                                    <span class="toggle-thumb"></span>
+                                </span>
+                            </label>
+                        </div>
+
+                        <!-- What AI detects — shown when ON -->
+                        <div id="auto-badges" class="auto-badges">
+                            <span class="detect-badge"><i data-lucide="zoom-in"></i> Font Size</span>
+                            <span class="detect-badge"><i data-lucide="align-justify"></i> Line Spacing</span>
+                            <span class="detect-badge"><i data-lucide="indent"></i> Indentation</span>
+                            <span class="detect-badge"><i data-lucide="align-left"></i> Alignment</span>
+                            <span class="detect-badge"><i data-lucide="bold"></i> Bold / Italic / Underline</span>
+                            <span class="detect-badge"><i data-lucide="move-horizontal"></i> Margins</span>
+                        </div>
+                    </div>
+
+                    <!-- ── MANUAL OVERRIDES (hidden by default, shown when auto is OFF) ── -->
+                    <div id="manual-panel" class="formatting-panel hidden">
+                        <p class="manual-note"><i data-lucide="info"></i> Manual mode — you choose all formatting applied uniformly to the output.</p>
+
+                        <!-- Font Family -->
+                        <div class="fmt-group fmt-group--wide">
+                            <label for="font_family" class="option-label">
+                                <i data-lucide="type"></i> Font Family
+                            </label>
+                            <div class="custom-select-wrapper">
+                                <select name="font_family" id="font_family" class="custom-select">
+                                    <option value="Calibri">Calibri (Default)</option>
+                                    <option value="Times New Roman">Times New Roman</option>
+                                    <option value="Arial">Arial</option>
+                                    <option value="Georgia">Georgia</option>
+                                    <option value="Courier New">Courier New (Mono)</option>
+                                    <option value="Verdana">Verdana</option>
+                                </select>
+                                <i data-lucide="chevron-down" class="select-icon"></i>
+                            </div>
+                        </div>
+
+                        <!-- Font Size -->
+                        <div class="fmt-group">
+                            <label for="font_size" class="option-label">
+                                <i data-lucide="zoom-in"></i> Font Size
+                                <span class="live-val" id="font-size-val">12 pt</span>
+                            </label>
+                            <input type="range" id="font_size" name="font_size" min="8" max="28" value="12" step="1"
+                                   class="range-slider"
+                                   oninput="document.getElementById('font-size-val').textContent = this.value + ' pt'">
+                            <div class="range-labels"><span>8pt</span><span>28pt</span></div>
+                        </div>
+
+                        <!-- Line Spacing -->
+                        <div class="fmt-group">
+                            <label for="line_spacing" class="option-label">
+                                <i data-lucide="align-justify"></i> Line Spacing
+                                <span class="live-val" id="line-spacing-val">1.15×</span>
+                            </label>
+                            <input type="range" id="line_spacing" name="line_spacing" min="1.0" max="3.0" value="1.15"
+                                   step="0.05" class="range-slider"
+                                   oninput="document.getElementById('line-spacing-val').textContent = parseFloat(this.value).toFixed(2) + '×'">
+                            <div class="range-labels"><span>1.0× single</span><span>3.0× triple</span></div>
+                        </div>
+
+                        <!-- Para Spacing -->
+                        <div class="fmt-group">
+                            <label for="para_spacing" class="option-label">
+                                <i data-lucide="rows-3"></i> Paragraph Gap
+                                <span class="live-val" id="para-spacing-val">8 pt</span>
+                            </label>
+                            <input type="range" id="para_spacing" name="para_spacing" min="0" max="36" value="8"
+                                   step="2" class="range-slider"
+                                   oninput="document.getElementById('para-spacing-val').textContent = this.value + ' pt'">
+                            <div class="range-labels"><span>0pt</span><span>36pt</span></div>
+                        </div>
+
+                        <!-- Indent -->
+                        <div class="fmt-group">
+                            <label for="first_line_indent" class="option-label">
+                                <i data-lucide="indent"></i> First-Line Indent
+                                <span class="live-val" id="indent-val">0.0 cm</span>
+                            </label>
+                            <input type="range" id="first_line_indent" name="first_line_indent" min="0" max="3.0"
+                                   value="0" step="0.25" class="range-slider"
+                                   oninput="document.getElementById('indent-val').textContent = parseFloat(this.value).toFixed(2) + ' cm'">
+                            <div class="range-labels"><span>None</span><span>3 cm</span></div>
+                        </div>
+
+                        <!-- Margins -->
+                        <div class="fmt-group">
+                            <label for="page_margin" class="option-label">
+                                <i data-lucide="move-horizontal"></i> Page Margins
+                                <span class="live-val" id="margin-val">2.54 cm</span>
+                            </label>
+                            <input type="range" id="page_margin" name="page_margin" min="1.0" max="5.0"
+                                   value="2.54" step="0.25" class="range-slider"
+                                   oninput="document.getElementById('margin-val').textContent = parseFloat(this.value).toFixed(2) + ' cm'">
+                            <div class="range-labels"><span>1 cm narrow</span><span>5 cm wide</span></div>
+                        </div>
+
+                        <!-- Alignment -->
+                        <div class="fmt-group fmt-group--wide">
+                            <label class="option-label"><i data-lucide="align-center"></i> Text Alignment</label>
+                            <div class="align-group">
+                                <input type="radio" name="text_align" id="align-left" value="left" checked class="align-radio">
+                                <label for="align-left" class="align-btn"><i data-lucide="align-left"></i><span>Left</span></label>
+                                <input type="radio" name="text_align" id="align-center" value="center" class="align-radio">
+                                <label for="align-center" class="align-btn"><i data-lucide="align-center"></i><span>Center</span></label>
+                                <input type="radio" name="text_align" id="align-right" value="right" class="align-radio">
+                                <label for="align-right" class="align-btn"><i data-lucide="align-right"></i><span>Right</span></label>
+                                <input type="radio" name="text_align" id="align-justify" value="justify" class="align-radio">
+                                <label for="align-justify" class="align-btn"><i data-lucide="align-justify"></i><span>Justify</span></label>
+                            </div>
+                        </div>
+
+                        <!-- B / I / U -->
+                        <div class="fmt-group fmt-group--wide">
+                            <label class="option-label"><i data-lucide="bold"></i> Text Style</label>
+                            <div class="style-toggles">
+                                <input type="checkbox" id="text-bold" name="text_bold" value="true" class="toggle-check">
+                                <label for="text-bold" class="toggle-btn"><strong>B</strong></label>
+                                <input type="checkbox" id="text-italic" name="text_italic" value="true" class="toggle-check">
+                                <label for="text-italic" class="toggle-btn"><em>I</em></label>
+                                <input type="checkbox" id="text-underline" name="text_underline" value="true" class="toggle-check">
+                                <label for="text-underline" class="toggle-btn"><u>U</u></label>
+                            </div>
+                        </div>
+
+                        <!-- Preview -->
+                        <div class="preview-swatch fmt-group--wide" id="preview-swatch">
+                            <p class="swatch-label">Live Preview</p>
+                            <p id="swatch-text" class="swatch-text">The quick brown fox jumps over the lazy dog.</p>
+                        </div>
+                    </div><!-- /manual-panel -->
+
+                    <!-- ── SUBMIT ── -->
+                    <button type="submit" id="submit-btn" class="btn btn-primary cyber-glitch" data-text="INITIALIZE_CONVERSION" disabled style="width: 100%; margin-top: 1rem;">
+                        <span class="btn-text">INITIALIZE_CONVERSION</span>
+                        <i data-lucide="power" class="btn-icon"></i>
+                    </button>
+
+                    <div id="loading-state" class="loading-state hidden">
+                        <div class="spinner"></div>
+                        <p class="loading-text" id="loading-msg">
+                            Analysing handwriting formatting with AI...<br>
+                            <span class="loading-subtext">This may take 15–30 seconds for large pages.</span>
+                        </p>
+                    </div>
+
+                </form>
+            </div>
+
+            <div class="detects-grid" style="margin-top: 4rem;">
+                <div class="detect-card">
+                    <i data-lucide="wand-2" class="detect-card-icon"></i>
+                    <h4>Auto Formatting</h4>
+                    <p>AI detects font size, spacing, alignment &amp; indentation directly from your handwriting.</p>
+                </div>
+                <div class="detect-card">
+                    <i data-lucide="sliders" class="detect-card-icon"></i>
+                    <h4>Manual Control</h4>
+                    <p>Override everything manually — font, size, margins, bold, italic, alignment and more.</p>
+                </div>
+                <div class="detect-card">
+                    <i data-lucide="layers" class="detect-card-icon"></i>
+                    <h4>Multi-Page PDFs</h4>
+                    <p>Each page is processed individually with its own detected formatting properties.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/js/theme.js"></script>
+    <script src="/static/js/main.js"></script>
+    <script>lucide.createIcons();</script>
+</body>
+</html>
