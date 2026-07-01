@@ -25,3 +25,6 @@ scratch_output.*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Logs
+*.log

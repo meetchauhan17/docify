@@ -1,11 +1,11 @@
-import os, uuid, time, json, re, sys
+import os, uuid, time, json, re, sys, base64, io
 from pathlib import Path
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pdf2image import convert_from_path
+import pypdfium2 as pdfium
 from docx import Document
 from docx.shared import Pt, Cm, Inches, Emu
 from docx.oxml.ns import qn
@@ -26,7 +26,91 @@ try:
 except Exception:
     pass  # Python < 3.7 or non-TextIOWrapper stdout
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# ── Multi-key Gemini rotation ──────────────────────
+# Support comma-separated list: GEMINI_API_KEY=key1,key2,key3
+_GEMINI_KEYS_RAW = os.getenv("GEMINI_API_KEY", "")
+_GEMINI_KEYS: list[str] = [k.strip() for k in _GEMINI_KEYS_RAW.split(",") if k.strip()]
+_gemini_key_idx = 0   # current key index (rotated on 429/quota)
+
+def _get_gemini_key() -> str:
+    return _GEMINI_KEYS[_gemini_key_idx % len(_GEMINI_KEYS)] if _GEMINI_KEYS else ""
+
+def _rotate_gemini_key():
+    global _gemini_key_idx
+    _gemini_key_idx += 1
+    new_key = _get_gemini_key()
+    print(f"  [KEY-ROTATE] Switched to Gemini key index {_gemini_key_idx % max(1, len(_GEMINI_KEYS))}")
+    return new_key
+
+# Build initial Gemini client
+def _make_gemini_client(api_key: str):
+    return genai.Client(
+        api_key=api_key,
+        http_options=genai_types.HttpOptions(timeout=120_000),
+    ) if api_key else None
+
+
+def _classify_text_element(txt: str) -> tuple[bool, bool]:
+    """
+    General classifier for text elements in any document.
+    Returns (is_note, is_metadata).
+    """
+    txt_strip = txt.strip()
+    if not txt_strip:
+        return False, False
+    lower_txt = txt_strip.lower()
+
+    # 1. Footnote/Signature/Note keywords
+    note_start_keywords = {
+        "note", "batch", "bacth", "prepared", "approved", "signature", "signed", "sign",
+        "prof", "head", "director", "manager", "chairman", "dean", "officer", "coordinator",
+        "clerk", "assistant", "footnote", "remark", "remarks", "instruction", "instructions"
+    }
+    note_contains_keywords = {
+        "prof.", "dr.", "prepared by", "approved by", "asst. prof", "head, cse", "signature of",
+        "authorized signatory", "seal & signature", "head of department"
+    }
+
+    first_word = lower_txt.split()[0] if lower_txt.split() else ""
+    # Remove trailing punctuation
+    first_word = "".join(char for char in first_word if char.isalnum())
+
+    is_note = False
+    if first_word in note_start_keywords:
+        is_note = True
+    elif any(kw in lower_txt for kw in note_contains_keywords):
+        is_note = True
+
+    # 2. Metadata keywords or Key-Value format
+    is_metadata = False
+    metadata_start_keywords = {
+        "date", "page", "duration", "class", "year", "sem", "subject", "time", "location",
+        "remarks", "author", "version", "title", "dept", "department", "id", "no", "doc", "document"
+    }
+    
+    if not is_note:
+        if first_word in metadata_start_keywords:
+            is_metadata = True
+        elif ":" in lower_txt:
+            key_part = lower_txt.split(":")[0].strip()
+            if (len(key_part) > 0 and len(key_part) <= 25 and 
+                    all(char.isalnum() or char.isspace() or char in "-_/" for char in key_part)):
+                is_metadata = True
+
+    return is_note, is_metadata
+
+# Groq & OpenRouter keys
+GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+
+# Track which provider last succeeded (for status endpoint)
+_last_provider: str = "none"
+_provider_status: dict = {
+    "gemini":     "unknown",
+    "groq":       "unknown" if GROQ_API_KEY else "not_configured",
+    "openrouter": "unknown" if OPENROUTER_API_KEY else "not_configured",
+}
+
 from pydantic import BaseModel, Field
 from typing import List, Optional
 
@@ -66,6 +150,10 @@ class DocElement(BaseModel):
     table_data: Optional[List[List[str]]] = Field(
         None,
         description="A list of rows, where each row is a list of strings representing the cells of the table."
+    )
+    borderless: Optional[bool] = Field(
+        None,
+        description="True if the table is a layout grid (e.g. side-by-side signature blocks, multi-column key-value pairs) and should be rendered without visible borders."
     )
     bbox: Optional[List[float]] = Field(
         None,
@@ -110,10 +198,8 @@ class DocumentLayout(BaseModel):
         description="The ordered list of all document elements (text, tables, drawings, blank lines) from top to bottom of the page in reading order."
     )
 
-client = genai.Client(
-    api_key=GEMINI_API_KEY,
-    http_options=genai_types.HttpOptions(timeout=120_000),
-)
+# Gemini client — rebuilt on key rotation
+_gemini_client = _make_gemini_client(_get_gemini_key())
 
 UPLOAD_DIR = "uploads"
 OUTPUT_DIR = "outputs"
@@ -155,11 +241,13 @@ def about(request: Request):
 
 # ── PDF → Images ──
 def pdf_to_images(path):
-    imgs = convert_from_path(path)
+    doc = pdfium.PdfDocument(path)
     paths = []
-    for i, img in enumerate(imgs):
+    for i, page in enumerate(doc):
+        bitmap = page.render(scale=2)
+        pil_img = bitmap.to_pil()
         p = f"{UPLOAD_DIR}/{uuid.uuid4()}_{i}.png"
-        img.save(p)
+        pil_img.save(p)
         paths.append(p)
     return paths
 
@@ -188,6 +276,11 @@ Analyse the document from TOP to BOTTOM, LEFT to RIGHT. Generate a list of eleme
 
 ━━━ NATIVE TABLES ━━━
 Identify any tables in the image. For each table, return it as a 'table' element with `table_data` representing a 2D grid of cell texts. Extract all cell text accurately.
+If the table has no visible gridlines, set `borderless` to True.
+
+━━━ SIGNATURE BLOCKS & SIDE-BY-SIDE TEXT ━━━
+If the document has side-by-side text columns, side-by-side metadata keys, or side-by-side signature blocks (for example, 'Prepared By' on the left and 'Approved By' on the right, with names/titles/drawings/images underneath them), you MUST group them into a single 'table' element with `borderless` set to True.
+Each column of the table should correspond to one side-by-side block. This is critical to ensure they are rendered next to each other rather than stacked vertically. If there are inline signature drawings, include them in the respective cells.
 
 ━━━ DRAWINGS, DIAGRAMS & SHAPES ━━━
 Identify all drawings (diagrams, flowcharts, graphs, arrows, brackets, sketches).
@@ -232,62 +325,305 @@ def _preprocess_for_ocr(img: Image.Image) -> Image.Image:
     return img
 
 
-# ─────────────────────────────────────────────────
-#  Gemini call wrapper with retry
-# ─────────────────────────────────────────────────
-# Primary and fallback models — tried in order when 503 occurs
+# ─────────────────────────────────────────────────────────────
+#  Multi-Provider Vision API — Gemini → Groq → OpenRouter
+# ─────────────────────────────────────────────────────────────
 _PRIMARY_MODEL  = "gemini-2.5-flash"
 _FALLBACK_MODEL = "gemini-2.0-flash"
 
-def _call_gemini(img, prompt, retries=4, preprocess=False, config=None):
-    """
-    Call Gemini with automatic retry and model fallback.
-    On 503 (overloaded), waits with exponential back-off then switches
-    to _FALLBACK_MODEL before giving up.
-    """
-    last_error = None
-    if preprocess:
-        img = _preprocess_for_ocr(img)
+# Error patterns that mean "quota/rate-limit" → try next provider
+_QUOTA_PATTERNS = (
+    "429", "RESOURCE_EXHAUSTED", "quota", "rate_limit",
+    "rate limit", "exceeded", "too many", "QUOTA_EXCEEDED",
+)
 
+def _is_quota_error(err: Exception) -> bool:
+    s = str(err).lower()
+    return any(p.lower() in s for p in _QUOTA_PATTERNS)
+
+def _is_overload_error(err: Exception) -> bool:
+    s = str(err)
+    return "503" in s or "UNAVAILABLE" in s
+
+
+# ── Helper: PIL Image → base64 string ──
+def _img_to_base64(img: Image.Image, fmt="JPEG") -> str:
+    buf = io.BytesIO()
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    img.save(buf, format=fmt, quality=90)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+# ── Provider 1: Gemini (with multi-key rotation) ──
+def _try_gemini(img: Image.Image, prompt, config=None, retries=4) -> str:
+    global _gemini_client, _provider_status, _last_provider
+    last_error = None
     models_to_try = [_PRIMARY_MODEL, _FALLBACK_MODEL]
 
     for model in models_to_try:
         for attempt in range(1, retries + 2):
             try:
-                print(f"  Gemini API [{model}] (attempt {attempt})...")
-                resp = client.models.generate_content(
+                print(f"  [Gemini/{model}] attempt {attempt}, key idx={_gemini_key_idx % max(1,len(_GEMINI_KEYS))}...")
+                resp = _gemini_client.models.generate_content(
                     model=model,
                     contents=[prompt, img],
                     config=config,
                 )
+                _provider_status["gemini"] = "ok"
+                _last_provider = "gemini"
                 return resp.text
             except Exception as e:
                 last_error = e
                 err_str = str(e)
-                print(f"  Attempt {attempt} failed: {type(e).__name__}: {e}")
-                is_503 = "503" in err_str or "UNAVAILABLE" in err_str
-                if attempt <= retries:
-                    if is_503:
-                        # Exponential backoff: 4s, 8s, 16s, 32s
+                print(f"  [Gemini] attempt {attempt} failed: {type(e).__name__}: {e}")
+
+                if _is_quota_error(e):
+                    # Rotate Gemini key and retry immediately
+                    if len(_GEMINI_KEYS) > 1:
+                        new_key = _rotate_gemini_key()
+                        _gemini_client = _make_gemini_client(new_key)
+                        time.sleep(1)
+                        continue  # retry same model with new key
+                    else:
+                        _provider_status["gemini"] = "quota_exceeded"
+                        raise  # single key, escalate to next provider
+
+                if _is_overload_error(e):
+                    if attempt <= retries:
                         wait = (2 ** attempt) * 2
-                        print(f"  High load detected. Retrying in {wait}s...")
+                        print(f"  [Gemini] overloaded, retrying in {wait}s...")
                         time.sleep(wait)
                     else:
-                        # Non-503 error — no point retrying same model
+                        _provider_status["gemini"] = "overloaded"
                         break
                 else:
-                    if is_503:
-                        print(f"  [{model}] still overloaded after {retries+1} attempts.")
-                    break  # exhausted retries for this model
-        else:
-            # All retries exhausted without breaking — move to next model
-            pass
-        if not ("503" in str(last_error) or "UNAVAILABLE" in str(last_error)):
-            # Non-503 failure — no point trying fallback model
+                    # Non-retryable error
+                    _provider_status["gemini"] = "error"
+                    raise
+
+        if not _is_overload_error(last_error) if last_error else True:
             break
         if model != models_to_try[-1]:
-            print(f"  Switching to fallback model: {_FALLBACK_MODEL}")
+            print(f"  [Gemini] switching to fallback model {_FALLBACK_MODEL}")
+
     raise last_error
+
+
+# ── Provider 2: Groq (Llama 4 Scout Vision) ──
+def _try_groq(img: Image.Image, prompt, config=None, retries=3) -> str:
+    global _provider_status, _last_provider
+    if not GROQ_API_KEY:
+        raise RuntimeError("Groq API key not configured")
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        raise RuntimeError("openai package not installed — run: pip install openai")
+
+    # Groq uses OpenAI-compatible API
+    groq_client = OpenAI(
+        api_key=GROQ_API_KEY,
+        base_url="https://api.groq.com/openai/v1",
+    )
+
+    # Groq vision models to try in order
+    groq_models = [
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
+        "llama-3.2-90b-vision-preview",
+        "llama-3.2-11b-vision-preview",
+    ]
+
+    img_b64 = _img_to_base64(img)
+    plain_prompt = (
+        prompt if isinstance(prompt, str)
+        else PLAIN_OCR_PROMPT
+    )
+    is_json = config and getattr(config, "response_mime_type", None) == "application/json"
+    if is_json:
+        import json
+        schema_str = json.dumps(DocumentLayout.model_json_schema(), indent=2)
+        plain_prompt += f"\n\nYou MUST return a JSON object matching this JSON Schema:\n{schema_str}\n\nReturn ONLY the valid JSON object, with no markdown formatting or commentary."
+
+    last_error = None
+    for model in groq_models:
+        for attempt in range(1, retries + 2):
+            try:
+                print(f"  [Groq/{model}] attempt {attempt}...")
+                kwargs = {
+                    "model": model,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": plain_prompt},
+                            {"type": "image_url", "image_url": {
+                                "url": f"data:image/jpeg;base64,{img_b64}"
+                            }},
+                        ]
+                    }],
+                    "max_tokens": 4096,
+                    "temperature": 0.1,
+                }
+                if is_json:
+                    kwargs["response_format"] = {"type": "json_object"}
+                
+                try:
+                    resp = groq_client.chat.completions.create(**kwargs)
+                except Exception as je:
+                    if is_json and "response_format" in kwargs:
+                        del kwargs["response_format"]
+                        resp = groq_client.chat.completions.create(**kwargs)
+                    else:
+                        raise je
+
+                result = resp.choices[0].message.content
+                result = _clean_json_response(result)
+                _provider_status["groq"] = "ok"
+                _last_provider = "groq"
+                print(f"  [Groq] Success with {model}")
+                return result
+            except Exception as e:
+                last_error = e
+                print(f"  [Groq/{model}] attempt {attempt} failed: {type(e).__name__}: {e}")
+                if _is_quota_error(e):
+                    _provider_status["groq"] = "quota_exceeded"
+                    break  # try next model
+                if _is_overload_error(e) and attempt <= retries:
+                    time.sleep((2 ** attempt))
+                else:
+                    break
+    _provider_status["groq"] = "error"
+    raise last_error or RuntimeError("Groq: all models failed")
+
+
+# ── Provider 3: OpenRouter (free vision models) ──
+def _try_openrouter(img: Image.Image, prompt, config=None, retries=3) -> str:
+    global _provider_status, _last_provider
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OpenRouter API key not configured")
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        raise RuntimeError("openai package not installed — run: pip install openai")
+
+    or_client = OpenAI(
+        api_key=OPENROUTER_API_KEY,
+        base_url="https://openrouter.ai/api/v1",
+        default_headers={
+            "HTTP-Referer": "https://docify.app",
+            "X-Title": "Docify AI",
+        }
+    )
+
+    # Free vision-capable models on OpenRouter
+    or_models = [
+        "qwen/qwen2.5-vl-72b-instruct:free",
+        "qwen/qwen2-vl-7b-instruct:free",
+        "meta-llama/llama-3.2-11b-vision-instruct:free",
+        "google/gemini-2.0-flash-exp:free",
+    ]
+
+    img_b64 = _img_to_base64(img)
+    plain_prompt = prompt if isinstance(prompt, str) else PLAIN_OCR_PROMPT
+    is_json = config and getattr(config, "response_mime_type", None) == "application/json"
+    if is_json:
+        import json
+        schema_str = json.dumps(DocumentLayout.model_json_schema(), indent=2)
+        plain_prompt += f"\n\nYou MUST return a JSON object matching this JSON Schema:\n{schema_str}\n\nReturn ONLY the valid JSON object, with no markdown formatting or commentary."
+
+    last_error = None
+    for model in or_models:
+        for attempt in range(1, retries + 2):
+            try:
+                print(f"  [OpenRouter/{model}] attempt {attempt}...")
+                kwargs = {
+                    "model": model,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": plain_prompt},
+                            {"type": "image_url", "image_url": {
+                                "url": f"data:image/jpeg;base64,{img_b64}"
+                            }},
+                        ]
+                    }],
+                    "max_tokens": 4096,
+                    "temperature": 0.1,
+                }
+                if is_json:
+                    kwargs["response_format"] = {"type": "json_object"}
+                
+                try:
+                    resp = or_client.chat.completions.create(**kwargs)
+                except Exception as je:
+                    if is_json and "response_format" in kwargs:
+                        del kwargs["response_format"]
+                        resp = or_client.chat.completions.create(**kwargs)
+                    else:
+                        raise je
+
+                result = resp.choices[0].message.content
+                result = _clean_json_response(result)
+                _provider_status["openrouter"] = "ok"
+                _last_provider = "openrouter"
+                print(f"  [OpenRouter] Success with {model}")
+                return result
+            except Exception as e:
+                last_error = e
+                print(f"  [OpenRouter/{model}] attempt {attempt} failed: {type(e).__name__}: {e}")
+                if _is_quota_error(e):
+                    _provider_status["openrouter"] = "quota_exceeded"
+                    break
+                if _is_overload_error(e) and attempt <= retries:
+                    time.sleep((2 ** attempt))
+                else:
+                    break
+    _provider_status["openrouter"] = "error"
+    raise last_error or RuntimeError("OpenRouter: all models failed")
+
+
+# ── Master dispatcher: tries each provider in order ──
+def _call_vision_api(img: Image.Image, prompt, config=None) -> str:
+    """
+    Try Gemini → Groq → OpenRouter in sequence.
+    Falls to next provider only on quota/rate-limit errors.
+    """
+    providers = []
+    if _GEMINI_KEYS:
+        providers.append(("Gemini",     lambda: _try_gemini(img, prompt, config)))
+    if GROQ_API_KEY:
+        providers.append(("Groq",       lambda: _try_groq(img, prompt, config)))
+    if OPENROUTER_API_KEY:
+        providers.append(("OpenRouter", lambda: _try_openrouter(img, prompt, config)))
+
+    if not providers:
+        raise RuntimeError("No API keys configured. Add GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY to .env")
+
+    last_error = None
+    for name, fn in providers:
+        try:
+            return fn()
+        except Exception as e:
+            last_error = e
+            if _is_quota_error(e):
+                print(f"  [{name}] quota/rate-limit hit — trying next provider...")
+                continue
+            else:
+                # Non-quota error (bad image, auth failure, etc) — re-raise immediately
+                raise
+
+    raise RuntimeError(
+        f"All API providers exhausted. Last error: {last_error}"
+    )
+
+
+# Backward-compat alias (used by run_ocr_manual)
+def _call_gemini(img, prompt, retries=4, preprocess=False, config=None):
+    if preprocess:
+        img = _preprocess_for_ocr(img)
+    return _call_vision_api(img, prompt, config)
 
 
 # ─────────────────────────────────────────────────
@@ -600,6 +936,25 @@ def _merge_elements(text_elements, drawings):
 #  Then merge.
 # ─────────────────────────────────────────────────
 def run_ocr_auto(image_path):
+    import hashlib
+    import json
+    import os
+
+    # Simple hash-based local cache for OCR
+    try:
+        hasher = hashlib.md5()
+        with open(image_path, "rb") as f:
+            hasher.update(f.read())
+        cache_key = hasher.hexdigest()
+        cache_file = os.path.join(UPLOAD_DIR, f"ocr_cache_{cache_key}.json")
+        if os.path.exists(cache_file):
+            print(f"  [CACHE] Loading cached OCR layout from {cache_file}...")
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached_data = json.load(f)
+                return cached_data["elements"], cached_data["meta"]
+    except Exception as e:
+        print(f"  [CACHE] Failed to check/load cache: {e}")
+
     print(f"[AUTO] Consolidated OCR & Layout: {image_path}")
     raw_img = Image.open(image_path)
 
@@ -607,14 +962,19 @@ def run_ocr_auto(image_path):
     img = _preprocess_for_ocr(raw_img)
 
     try:
-        print("  Calling Gemini for combined layout and text OCR...")
-        config = genai_types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=DocumentLayout,
-            temperature=0.1,
-        )
-        
-        resp_text = _call_gemini(img, COMBINED_OCR_PROMPT, config=config)
+        print("  Calling vision API for combined layout and text OCR...")
+        # Structured JSON config — only Gemini supports native schema;
+        # Groq/OpenRouter will fall back to plain text pipeline automatically.
+        config = None
+        if _GEMINI_KEYS and _provider_status.get("gemini") not in ("quota_exceeded",):
+            config = genai_types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=DocumentLayout,
+                temperature=0.1,
+            )
+
+        resp_text = _call_vision_api(img, COMBINED_OCR_PROMPT, config=config)
+        resp_text = _clean_json_response(resp_text)
         layout_data = DocumentLayout.model_validate_json(resp_text)
         print(f"  Gemini Layout: margin={layout_data.page_margin_cm}cm, spacing={layout_data.line_spacing}")
         
@@ -626,7 +986,8 @@ def run_ocr_auto(image_path):
             elif etype == "table":
                 elements.append({
                     "type": "table",
-                    "data": el.table_data or []
+                    "data": el.table_data or [],
+                    "borderless": getattr(el, "borderless", False) or False
                 })
             elif etype == "drawing":
                 if el.is_simple_arrow:
@@ -690,6 +1051,12 @@ def run_ocr_auto(image_path):
             "line_spacing": layout_data.line_spacing,
             "page_margin_cm": layout_data.page_margin_cm
         }
+        try:
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump({"elements": elements, "meta": meta}, f, ensure_ascii=False, indent=2)
+            print(f"  [CACHE] Saved OCR layout cache to {cache_file}")
+        except Exception as ce:
+            print(f"  [CACHE] Failed to save cache: {ce}")
         return elements, meta
 
     except Exception as e:
@@ -698,6 +1065,12 @@ def run_ocr_auto(image_path):
             raw_text = _call_gemini(img, PLAIN_OCR_PROMPT)
             text_elements = _parse_text_lines(raw_text)
             meta = {"line_spacing": 1.15, "page_margin_cm": 2.54}
+            try:
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump({"elements": text_elements, "meta": meta}, f, ensure_ascii=False, indent=2)
+                print(f"  [CACHE] Saved OCR fallback cache to {cache_file}")
+            except Exception as ce:
+                print(f"  [CACHE] Failed to save fallback cache: {ce}")
             return text_elements, meta
         except Exception as e2:
             err = f"[OCR FAILED: {type(e2).__name__}: {str(e2)[:200]}]"
@@ -724,27 +1097,47 @@ def run_ocr_manual(image_path):
 # ─────────────────────────────────────────────────
 #  Drawing crop helper
 # ─────────────────────────────────────────────────
-def _crop_drawing(image_path, bbox):
+def _crop_drawing(image_path, bbox, padding=0.0, pad_px=0,
+                  pad_top=None, pad_bottom=None, pad_left=None, pad_right=None):
     """
     Crop the drawing region from image_path using normalised bbox [x1,y1,x2,y2].
+    padding: relative fraction to expand each side.
+    pad_px: absolute pixel padding on all sides (overridden per-side by pad_top/bottom/left/right).
+    pad_top/bottom/left/right: per-side absolute pixel padding overrides.
     Returns the path to a cropped temp PNG, or None on any failure.
     """
     try:
         if not bbox or len(bbox) != 4:
             return None
         x1n, y1n, x2n, y2n = [float(v) for v in bbox]
+        img = Image.open(image_path)
+        w, h = img.size
+        if padding > 0.0:
+            bw = x2n - x1n
+            bh = y2n - y1n
+            x1n -= bw * padding
+            y1n -= bh * padding
+            x2n += bw * padding
+            y2n += bh * padding
+        # Absolute pixel padding with per-side overrides
+        pt = (pad_top    if pad_top    is not None else pad_px)
+        pb = (pad_bottom if pad_bottom is not None else pad_px)
+        pl = (pad_left   if pad_left   is not None else pad_px)
+        pr = (pad_right  if pad_right  is not None else pad_px)
+        x1n -= pl / w
+        y1n -= pt / h
+        x2n += pr / w
+        y2n += pb / h
         x1n = max(0.0, min(1.0, x1n))
         y1n = max(0.0, min(1.0, y1n))
         x2n = max(0.0, min(1.0, x2n))
         y2n = max(0.0, min(1.0, y2n))
         if x2n <= x1n or y2n <= y1n:
             return None
-        img = Image.open(image_path)
-        w, h = img.size
         cropped = img.crop((int(x1n*w), int(y1n*h), int(x2n*w), int(y2n*h)))
         out_path = f"{UPLOAD_DIR}/{uuid.uuid4()}_crop.png"
         cropped.save(out_path)
-        print(f"  Cropped drawing: {out_path} ({int((x2n-x1n)*w)}×{int((y2n-y1n)*h)}px)")
+        print(f"  Cropped drawing: {out_path} ({int((x2n-x1n)*w)}\u00d7{int((y2n-y1n)*h)}px)")
         return out_path
     except Exception as e:
         print(f"  _crop_drawing failed: {e}")
@@ -822,7 +1215,13 @@ def _add_inline_picture_docx(doc, img_path, bbox, page_margin_cm=2.54):
         para = doc.add_paragraph()
         para.paragraph_format.space_before = Pt(6)
         para.paragraph_format.space_after  = Pt(6)
-        para.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.CENTER
+        cx_norm = (x1n + x2n) / 2.0
+        if cx_norm < 0.35:
+            para.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        elif cx_norm > 0.65:
+            para.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        else:
+            para.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = para.add_run()
         run.add_picture(cropped, width=Cm(img_w_cm), height=Cm(img_h_cm))
         print(f"  [DOCX] Drawing inline: {img_w_cm:.2f}×{img_h_cm:.2f}cm")
@@ -851,9 +1250,10 @@ def _pdf_draw_text(c, txt, x, y, font_name, font_size, underline=False):
         c.line(x, y - 1.5, x + tw, y - 1.5)
 
 
-def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h):
+def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=False, drawings=None, pg_path=None, table_el=None):
     """
-    Draw a crisp native table on the PDF canvas.
+    Draw a crisp native table on the PDF canvas with text wrapping, vertical cell merging (rowspan),
+    and horizontal cell merging (colspan).
     Returns the new y position.
     """
     if not table_data:
@@ -864,70 +1264,352 @@ def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h):
     if cols == 0:
         return y
 
-    # Calculate column widths using stringWidth
-    col_widths = [0] * cols
-    pad_x = 4
-    pad_y = 4
-    fsize = 11
+    # Make a copy of table_data so we can safely update text
+    table_data = [list(r) for r in table_data]
+    
+    # Pre-process DATE column (index 0) to combine date and day of week
+    DAYS_OF_WEEK = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+    for r_idx in range(1, rows):
+        val_curr = table_data[r_idx][0].strip() if len(table_data[r_idx]) > 0 else ""
+        if val_curr.lower() in DAYS_OF_WEEK:
+            # Find the first non-empty cell above it in DATE column
+            prev_r = r_idx - 1
+            while prev_r >= 0 and table_data[prev_r][0].strip() == "":
+                prev_r -= 1
+            if prev_r >= 0:
+                val_prev = table_data[prev_r][0].strip()
+                if val_curr.lower() not in val_prev.lower():
+                    table_data[prev_r][0] = (val_prev + " " + val_curr).strip()
+                    table_data[r_idx][0] = ""
+
+    # Match drawings to empty cells using pre-scan assignments
+    cell_drawings = {}
+    if drawings and table_el:
+        for d in drawings:
+            if d.get("matched_table_id") == id(table_el):
+                cell_drawings[d.get("matched_cell")] = d
+                d["consumed"] = True
+
+    # 1a. Detect vertical cell spans (rowspans)
+    spans = [[(1, 1) for _ in range(cols)] for _ in range(rows)]
+    covered = [[False for _ in range(cols)] for _ in range(rows)]
+    ref_table = [list(r) for r in table_data]
+    
+    for col_idx in range(cols):
+        # Find non-empty rows for this column (excluding header)
+        non_empty_rows = []
+        for r_idx in range(1, rows):
+            cell_val = ref_table[r_idx][col_idx] if col_idx < len(ref_table[r_idx]) else ""
+            if cell_val.strip() != "":
+                non_empty_rows.append(r_idx)
+                
+        if not non_empty_rows:
+            continue
+            
+        assignments = {}
+        for r_idx in range(1, rows):
+            cell_val = ref_table[r_idx][col_idx] if col_idx < len(ref_table[r_idx]) else ""
+            if r_idx in non_empty_rows:
+                assignments[r_idx] = r_idx
+            else:
+                # Find nearest above and below in non_empty_rows
+                r_above = None
+                for rx in reversed(non_empty_rows):
+                    if rx < r_idx:
+                        r_above = rx
+                        break
+                r_below = None
+                for rx in non_empty_rows:
+                    if rx > r_idx:
+                        r_below = rx
+                        break
+                        
+                if r_above is not None and r_below is not None:
+                    # Calculate similarity score based on compatibility with other columns
+                    score_above = 0
+                    score_below = 0
+                    for cx in range(cols):
+                        if cx == col_idx:
+                            continue
+                        
+                        val_r = ref_table[r_idx][cx].strip().lower() if cx < len(ref_table[r_idx]) else ""
+                        val_above = ref_table[r_above][cx].strip().lower() if cx < len(ref_table[r_above]) else ""
+                        val_below = ref_table[r_below][cx].strip().lower() if cx < len(ref_table[r_below]) else ""
+                        
+                        if val_r != "":
+                            if val_r == val_above:
+                                score_above += 1
+                            if val_r == val_below:
+                                score_below += 1
+                    
+                    if score_below > score_above:
+                        assignments[r_idx] = r_below
+                    else:
+                        assignments[r_idx] = r_above
+                elif r_above is not None:
+                    assignments[r_idx] = r_above
+                elif r_below is not None:
+                    assignments[r_idx] = r_below
+                    
+        # Group by parent row to find spans
+        groups = {}
+        for r_idx, parent in assignments.items():
+            groups.setdefault(parent, []).append(r_idx)
+            
+        for parent, row_list in groups.items():
+            row_list.sort()
+            start_r = row_list[0]
+            span = len(row_list)
+            
+            spans[start_r][col_idx] = (span, 1)
+            parent_text = ref_table[parent][col_idx] if col_idx < len(ref_table[parent]) else ""
+            
+            table_data[start_r][col_idx] = parent_text
+            for rx in row_list:
+                if rx != start_r:
+                    covered[rx][col_idx] = True
+                    table_data[rx][col_idx] = ""
+
+    # 1b. Detect horizontal cell spans (colspans) on top of vertical spans
+    for r_idx in range(rows):
+        col_idx = 0
+        while col_idx < cols:
+            if not covered[r_idx][col_idx]:
+                r_span, c_span = spans[r_idx][col_idx]
+                next_c = col_idx + 1
+                while next_c < cols:
+                    # Merge next_c if it is empty, not covered, not matched to a drawing, and has same r_span
+                    if (not covered[r_idx][next_c] and 
+                        (table_data[r_idx][next_c].strip() == "") and 
+                        (r_idx, next_c) not in cell_drawings and
+                        spans[r_idx][next_c][0] == r_span):
+                        
+                        # Merge next_c into col_idx for all rows in the vertical span
+                        for rx in range(r_idx, r_idx + r_span):
+                            covered[rx][next_c] = True
+                            table_data[rx][next_c] = ""
+                        
+                        c_span += 1
+                        spans[r_idx][col_idx] = (r_span, c_span)
+                        next_c += 1
+                    else:
+                        break
+                col_idx += c_span
+            else:
+                col_idx += 1
+
+    # 2. Width & Padding configs
+    pad_x = 3.0 if rows > 5 else 4.0
+    pad_y = 2.0 if rows > 5 else 4.0
+    fsize = 9
     font_name = "Helvetica"
     font_bold = "Helvetica-Bold"
-
+    
+    # Calculate initial column widths, distributing spanned widths
+    col_widths = [0.0] * cols
     for r_idx, r in enumerate(table_data):
         f = font_bold if r_idx == 0 else font_name
         for i, cell in enumerate(r):
-            if i < cols:
-                w = c.stringWidth(cell, f, fsize)
-                col_widths[i] = max(col_widths[i], w + pad_x * 2)
+            if i < cols and not covered[r_idx][i]:
+                r_span, c_span = spans[r_idx][i]
+                w = c.stringWidth(cell, f, fsize) + pad_x * 2
+                if c_span == 1:
+                    col_widths[i] = max(col_widths[i], w)
+                else:
+                    w_per_col = w / c_span
+                    for cx in range(i, i + c_span):
+                        col_widths[cx] = max(col_widths[cx], w_per_col)
 
-    usable_w = page_w - 2 * margin_pts
+    # Ensure min width for all columns
+    for i in range(cols):
+        col_widths[i] = max(col_widths[i], 15.0)
+
+    usable_w = page_w - 2.0 * margin_pts
     total_w = sum(col_widths)
     
     # Scale or stretch widths to fit page logically
     if total_w < usable_w * 0.5:
-        # Stretch to 50% minimum
         scale = (usable_w * 0.5) / total_w
         col_widths = [cw * scale for cw in col_widths]
     elif total_w > usable_w:
-        # Squeeze to fit page
         scale = usable_w / total_w
         col_widths = [cw * scale for cw in col_widths]
         
     x_start = margin_pts
-    row_h = fsize + pad_y * 2
+
+    # Helper to wrap text into lines
+    def wrap_text(text, width, font, size):
+        if not text:
+            return []
+        words = text.split(" ")
+        lines = []
+        cur_line = ""
+        for word in words:
+            test = (cur_line + " " + word).strip()
+            if c.stringWidth(test, font, size) <= width - pad_x * 2:
+                cur_line = test
+            else:
+                if cur_line:
+                    lines.append(cur_line)
+                cur_line = word
+        if cur_line:
+            lines.append(cur_line)
+        return lines
+
+    # Pre-calculate wrapped lines for all active cells using spanned widths
+    wrapped_data = []
+    for r_idx, r in enumerate(table_data):
+        row_wrapped = []
+        f = font_bold if r_idx == 0 else font_name
+        for col_idx in range(cols):
+            if not covered[r_idx][col_idx]:
+                r_span, c_span = spans[r_idx][col_idx]
+                cell_txt = r[col_idx] if col_idx < len(r) else ""
+                cw_span = sum(col_widths[col_idx : col_idx + c_span])
+                lines = wrap_text(cell_txt, cw_span, f, fsize)
+                row_wrapped.append(lines)
+            else:
+                row_wrapped.append([])
+        wrapped_data.append(row_wrapped)
+
+    # Calculate row heights dynamically, distributing spans correctly
+    row_heights = [fsize + pad_y * 2] * rows
+    line_h = fsize * 1.05 if rows > 5 else fsize * 1.15
     
-    y -= row_h  # start position for first row bottom
+    for r_idx in range(rows):
+        for col_idx in range(cols):
+            if not covered[r_idx][col_idx]:
+                r_span, c_span = spans[r_idx][col_idx]
+                max_lines = len(wrapped_data[r_idx][col_idx])
+                if max_lines == 0:
+                    max_lines = 1
+                req_h = max_lines * line_h + pad_y * 2
+                
+                # Check drawing height if matched drawing
+                d = cell_drawings.get((r_idx, col_idx))
+                if d and pg_path:
+                    try:
+                        bbox = d.get("bbox")
+                        cw_span = sum(col_widths[col_idx : col_idx + c_span])
+                        
+                        if r_idx == 0:
+                            cropped = _crop_drawing(pg_path, bbox, pad_px=15, pad_bottom=2)
+                        else:
+                            cropped = _crop_drawing(pg_path, bbox, pad_px=20, pad_top=-12)
+                        if cropped:
+                            with Image.open(cropped) as ci:
+                                nat_w, nat_h = ci.size
+                            aspect = nat_h / nat_w if nat_w > 0 else 0.5
+                            draw_w = cw_span - pad_x * 2
+                            draw_h = draw_w * aspect
+                            if draw_h < 50:
+                                draw_h = 50
+                            req_h = max(req_h, draw_h + pad_y * 2)
+                    except Exception:
+                        pass
+                
+                # Distribute required height across all spanned rows
+                current_span_h = sum(row_heights[r_idx : r_idx + r_span])
+                if current_span_h < req_h:
+                    diff = req_h - current_span_h
+                    add_per_row = diff / r_span
+                    for rx in range(r_idx, r_idx + r_span):
+                        row_heights[rx] += add_per_row
+        
+    total_table_height = sum(row_heights)
     
     # Simple page wrap check
-    if y - (rows * row_h) < margin_pts and rows < 30:
+    if y - total_table_height < margin_pts:
         c.showPage()
-        y = page_h - margin_pts - row_h
+        y = page_h - margin_pts
 
     # Draw grid and text
     c.setLineWidth(0.5)
-    for row_idx, r in enumerate(table_data):
+    
+    # Calculate top y for each row
+    y_tops = []
+    current_y = y
+    for h in row_heights:
+        y_tops.append(current_y)
+        current_y -= h
+    y_tops.append(current_y) # Bottom of last row
+    
+    for row_idx in range(rows):
         curr_x = x_start
+        y_row_top = y_tops[row_idx]
+        
         for col_idx in range(cols):
-            cell_txt = r[col_idx] if col_idx < len(r) else ""
-            cw = col_widths[col_idx]
+            cw_single = col_widths[col_idx]
             
-            # Draw cell box
-            c.rect(curr_x, y, cw, row_h)
+            if not covered[row_idx][col_idx]:
+                r_span, c_span = spans[row_idx][col_idx]
+                cw_span = sum(col_widths[col_idx : col_idx + c_span])
+                
+                # Determine cell bottom y-coordinate based on row span
+                span_bottom_idx = row_idx + r_span
+                y_cell_bottom = y_tops[span_bottom_idx]
+                h_cell = y_row_top - y_cell_bottom
+                
+                # Draw cell border
+                if not borderless:
+                    c.rect(curr_x, y_cell_bottom, cw_span, h_cell)
+                
+                # Check if there is a matched drawing for this cell
+                d = cell_drawings.get((row_idx, col_idx))
+                if d and pg_path:
+                    try:
+                        if row_idx == 0:
+                            cropped = _crop_drawing(pg_path, d.get("bbox"), pad_px=15, pad_bottom=2)
+                        else:
+                            cropped = _crop_drawing(pg_path, d.get("bbox"), pad_px=20, pad_top=-12)
+                        if cropped:
+                            with Image.open(cropped) as ci:
+                                nat_w, nat_h = ci.size
+                            aspect = nat_h / nat_w if nat_w > 0 else 0.5
+                            draw_w = cw_span - pad_x * 2
+                            draw_h = draw_w * aspect
+                            # Ensure minimum visual height
+                            if draw_h < 50:
+                                draw_h = 50
+                                draw_w = draw_h / aspect
+                            # Fit within cell height
+                            if draw_h > h_cell - pad_y * 2:
+                                draw_h = h_cell - pad_y * 2
+                                draw_w = draw_h / aspect
+                            # Center horizontally; place in upper portion of cell
+                            img_x = curr_x + (cw_span - draw_w) / 2.0
+                            img_y = y_cell_bottom + h_cell - pad_y - draw_h
+                            c.drawImage(ImageReader(cropped), img_x, img_y, width=draw_w, height=draw_h,
+                                        preserveAspectRatio=True, mask='auto')
+                    except Exception as e:
+                        print(f"  [PDF] Cell drawing failed: {e}")
+                else:
+                    # Draw wrapped lines inside the cell
+                    f = font_bold if row_idx == 0 else font_name
+                    c.setFont(f, fsize)
+                    
+                    lines = wrapped_data[row_idx][col_idx]
+                    num_lines = len(lines)
+                    total_text_h = num_lines * line_h
+                    
+                    # Vertically center text
+                    start_offset_y = (h_cell - total_text_h) / 2.0
+                    y_text = y_row_top - start_offset_y - fsize
+                    
+                    for line in lines:
+                        tw = c.stringWidth(line, f, fsize)
+                        if row_idx == 0:
+                            text_x = curr_x + (cw_span - tw) / 2.0
+                        else:
+                            text_x = curr_x + pad_x
+                            
+                        c.drawString(text_x, y_text, line)
+                        y_text -= line_h
+                    
+            curr_x += cw_single
             
-            # Draw text
-            f = font_bold if row_idx == 0 else font_name
-            c.setFont(f, fsize)
-            text_x = curr_x + pad_x
-            text_y = y + pad_y + 1
-            c.drawString(text_x, text_y, cell_txt)
-            
-            curr_x += cw
-            
-        y -= row_h
-        if y < margin_pts:
-            c.showPage()
-            y = page_h - margin_pts - row_h
-            
-    return y - 10
+    return y_tops[-1] - 10
+
 
 def _pdf_place_drawing_inline(c, image_path, bbox, y, page_w, margin_pts, page_h, line_spacing=1.15):
     """
@@ -963,8 +1645,14 @@ def _pdf_place_drawing_inline(c, image_path, bbox, y, page_w, margin_pts, page_h
             draw_h = max_h
             draw_w = draw_h / aspect if aspect > 0 else draw_w
 
-        # Centre the drawing horizontally
-        x = margin_pts + (content_w - draw_w) / 2.0
+        # Align horizontally based on original horizontal position
+        cx_norm = (x1n + x2n) / 2.0
+        if cx_norm < 0.35:
+            x = margin_pts
+        elif cx_norm > 0.65:
+            x = margin_pts + content_w - draw_w
+        else:
+            x = margin_pts + (content_w - draw_w) / 2.0
 
         # Check if there's enough room on the current page; if not, start new page
         if y - draw_h < margin_pts:
@@ -988,6 +1676,101 @@ def _pdf_place_drawing_inline(c, image_path, bbox, y, page_w, margin_pts, page_h
 # ═══════════════════════════════════════════════════
 #  CONVERT ENDPOINT
 # ═══════════════════════════════════════════════════
+# ── API Status endpoint ──────────────────────────
+@app.get("/api-status")
+def api_status():
+    """Return current provider health and which keys are configured."""
+    return JSONResponse({
+        "last_provider": _last_provider,
+        "providers": {
+            "gemini":     {
+                "configured": bool(_GEMINI_KEYS),
+                "key_count":  len(_GEMINI_KEYS),
+                "status":     _provider_status.get("gemini", "unknown"),
+            },
+            "groq":       {
+                "configured": bool(GROQ_API_KEY),
+                "status":     _provider_status.get("groq", "not_configured"),
+            },
+            "openrouter": {
+                "configured": bool(OPENROUTER_API_KEY),
+                "status":     _provider_status.get("openrouter", "not_configured"),
+            },
+        }
+    })
+
+
+def pre_scan_match_drawings(elements, page_w, page_h, margin_pts):
+    page_drawings = [item for item in elements if item.get("type") == "drawing"]
+    y_est = page_h - margin_pts
+    for el in elements:
+        etype = el.get("type", "text")
+        if etype == "blank_line":
+            y_est -= 8
+        elif etype == "arrow":
+            y_est -= 30
+        elif etype == "bracket":
+            y_est -= 44
+        elif etype == "drawing":
+            # If not already consumed, it will consume space in the flow
+            if not el.get("consumed", False):
+                y_est -= 60
+        elif etype == "table":
+            table_data = el.get("data", [])
+            if table_data:
+                rows = len(table_data)
+                cols = max(len(r) for r in table_data) if table_data else 0
+                col_widths_est = [ (page_w - 2 * margin_pts) / cols ] * cols
+                
+                for col_idx in range(cols):
+                    col_left = margin_pts + sum(col_widths_est[:col_idx])
+                    col_right = col_left + col_widths_est[col_idx]
+                    
+                    for r_idx in range(0, rows):
+                        cell_txt = table_data[r_idx][col_idx] if col_idx < len(table_data[r_idx]) else ""
+                        txt_clean = cell_txt.strip().lower().replace("[", "").replace("]", "").replace(" ", "")
+                        is_empty = txt_clean == "" or "signature" in txt_clean or "drawing" in txt_clean or "image" in txt_clean or "stamp" in txt_clean
+                        
+                        if is_empty:
+                            for d in page_drawings:
+                                if d.get("consumed", False):
+                                    continue
+                                bbox = d.get("bbox")
+                                if bbox and len(bbox) == 4:
+                                    x1, y1, x2, y2 = bbox
+                                    cx_norm = (x1 + x2) / 2.0
+                                    cy_norm = (y1 + y2) / 2.0
+                                    draw_x = cx_norm * page_w
+                                    draw_y = (1.0 - cy_norm) * page_h
+                                    
+                                    # Use dynamic row height estimation to prevent vertical matching overlap
+                                    row_h_est = 18 if rows > 8 else 30
+                                    y_min = y_est - rows * row_h_est - 40
+                                    y_max = y_est + 40
+                                    
+                                    if (col_left <= draw_x <= col_right) and (y_min <= draw_y <= y_max):
+                                        d["consumed"] = True
+                                        d["matched_cell"] = (r_idx, col_idx)
+                                        d["matched_table_id"] = id(el)
+                                        break
+                # Advance y_est using the dynamic row height estimation
+                row_h_est = 18 if rows > 8 else 25
+                y_est -= rows * row_h_est + 20
+        else:
+            y_est -= 16
+
+
+def _clean_json_response(resp_text: str) -> str:
+    text = resp_text.strip()
+    if text.startswith("```"):
+        first_newline = text.find("\n")
+        if first_newline != -1:
+            text = text[first_newline:].strip()
+        if text.endswith("```"):
+            text = text[:-3].strip()
+    return text
+
+
 @app.post("/convert")
 async def convert(
     file:              UploadFile = File(...),
@@ -1027,13 +1810,20 @@ async def convert(
 
         if use_auto:
             all_data = [run_ocr_auto(p) for p in pages]
-            _set_margins(doc, all_data[0][1].get("page_margin_cm", 2.54))
+            has_table = any(any(el.get("type") == "table" for el in elements) for elements, _ in all_data)
+            orig_margin = all_data[0][1].get("page_margin_cm", 2.54)
+            margin_cm = 1.5 if has_table else orig_margin
+            _set_margins(doc, margin_cm)
 
             for i, (elements, meta) in enumerate(all_data):
                 if i > 0:
                     doc.add_page_break()
                 ls = meta.get("line_spacing", 1.15)
-                pm = meta.get("page_margin_cm", 2.54)
+                pm = margin_cm
+                page_drawings = [item for item in elements if item.get("type") == "drawing"]
+                table_idx = 0
+                total_tables = sum(1 for item in elements if item.get("type") == "table")
+                pre_scan_match_drawings(elements, page_w=595.27, page_h=841.89, margin_pts=pm*PT_PER_CM)
 
                 for el in elements:
                     etype = el.get("type", "text")
@@ -1043,6 +1833,8 @@ async def convert(
                         para.paragraph_format.space_after = Pt(4)
 
                     elif etype == "drawing":
+                        if el.get("consumed", False):
+                            continue
                         # Inline image — sits naturally in the text flow
                         _add_inline_picture_docx(
                             doc,
@@ -1092,31 +1884,218 @@ async def convert(
                             cols = max((len(r) for r in table_data), default=0)
                             if cols > 0:
                                 table = doc.add_table(rows=rows, cols=cols)
-                                table.style = 'Table Grid'
+                                if el.get("borderless", False):
+                                    table.style = 'Normal Table'
+                                else:
+                                    table.style = 'Table Grid'
                                 
-                                for row_idx, row_data in enumerate(table_data):
-                                    for col_idx, cell_text in enumerate(row_data):
-                                        if col_idx < cols:
-                                            cell = table.cell(row_idx, col_idx)
-                                            cell.text = cell_text
-                                            for paragraph in cell.paragraphs:
-                                                for run in paragraph.runs:
-                                                    run.font.name = "Calibri"
-                                                    run.font.size = Pt(11)
-                                                    # Bold first row as header heuristic
-                                                    if row_idx == 0:
-                                                        run.font.bold = True
+                                # Make a copy of table_data so we can safely update text
+                                table_data = [list(r) for r in table_data]
+                                
+                                # Pre-process DATE column (index 0) to combine date and day of week
+                                DAYS_OF_WEEK = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+                                for r_idx in range(1, rows):
+                                    val_curr = table_data[r_idx][0].strip() if len(table_data[r_idx]) > 0 else ""
+                                    if val_curr.lower() in DAYS_OF_WEEK:
+                                        # Find the first non-empty cell above it in DATE column
+                                        prev_r = r_idx - 1
+                                        while prev_r >= 0 and table_data[prev_r][0].strip() == "":
+                                            prev_r -= 1
+                                        if prev_r >= 0:
+                                            val_prev = table_data[prev_r][0].strip()
+                                            if val_curr.lower() not in val_prev.lower():
+                                                table_data[prev_r][0] = (val_prev + " " + val_curr).strip()
+                                                table_data[r_idx][0] = ""
+                                
+                                # 1a. Detect vertical cell spans (rowspans)
+                                spans = [[(1, 1) for _ in range(cols)] for _ in range(rows)]
+                                covered = [[False for _ in range(cols)] for _ in range(rows)]
+                                ref_table = [list(r) for r in table_data]
+                                
+                                for col_idx in range(cols):
+                                    # Find non-empty rows for this column (excluding header)
+                                    non_empty_rows = []
+                                    for r_idx in range(1, rows):
+                                        cell_val = ref_table[r_idx][col_idx] if col_idx < len(ref_table[r_idx]) else ""
+                                        if cell_val.strip() != "":
+                                            non_empty_rows.append(r_idx)
+                                            
+                                    if not non_empty_rows:
+                                        continue
+                                        
+                                    assignments = {}
+                                    for r_idx in range(1, rows):
+                                        cell_val = ref_table[r_idx][col_idx] if col_idx < len(ref_table[r_idx]) else ""
+                                        if r_idx in non_empty_rows:
+                                            assignments[r_idx] = r_idx
+                                        else:
+                                            # Find nearest above and below in non_empty_rows
+                                            r_above = None
+                                            for rx in reversed(non_empty_rows):
+                                                if rx < r_idx:
+                                                    r_above = rx
+                                                    break
+                                            r_below = None
+                                            for rx in non_empty_rows:
+                                                if rx > r_idx:
+                                                    r_below = rx
+                                                    break
+                                                    
+                                            if r_above is not None and r_below is not None:
+                                                # Calculate similarity score based on compatibility with other columns
+                                                score_above = 0
+                                                score_below = 0
+                                                for c in range(cols):
+                                                    if c == col_idx:
+                                                        continue
+                                                    
+                                                    val_r = ref_table[r_idx][c].strip().lower() if c < len(ref_table[r_idx]) else ""
+                                                    val_above = ref_table[r_above][c].strip().lower() if c < len(ref_table[r_above]) else ""
+                                                    val_below = ref_table[r_below][c].strip().lower() if c < len(ref_table[r_below]) else ""
+                                                    
+                                                    if val_r != "":
+                                                        if val_r == val_above:
+                                                            score_above += 1
+                                                        if val_r == val_below:
+                                                            score_below += 1
+                                                
+                                                if score_below > score_above:
+                                                    assignments[r_idx] = r_below
+                                                else:
+                                                    assignments[r_idx] = r_above
+                                            elif r_above is not None:
+                                                assignments[r_idx] = r_above
+                                            elif r_below is not None:
+                                                assignments[r_idx] = r_below
+                                                
+                                    # Group by parent row to find spans
+                                    groups = {}
+                                    for r_idx, parent in assignments.items():
+                                        groups.setdefault(parent, []).append(r_idx)
+                                        
+                                    for parent, row_list in groups.items():
+                                        row_list.sort()
+                                        start_r = row_list[0]
+                                        span = len(row_list)
+                                        
+                                        spans[start_r][col_idx] = (span, 1)
+                                        parent_text = ref_table[parent][col_idx] if col_idx < len(ref_table[parent]) else ""
+                                        
+                                        table_data[start_r][col_idx] = parent_text
+                                        for rx in row_list:
+                                            if rx != start_r:
+                                                covered[rx][col_idx] = True
+                                                table_data[rx][col_idx] = ""
+
+                                # Match drawings to cells using pre-scan assignments
+                                cell_drawings = {}
+                                if page_drawings:
+                                    for d in page_drawings:
+                                        if d.get("matched_table_id") == id(el):
+                                            cell_drawings[d.get("matched_cell")] = d
+                                            d["consumed"] = True
+
+                                # 1b. Detect horizontal cell spans (colspans) on top of vertical spans
+                                for r_idx in range(rows):
+                                    col_idx = 0
+                                    while col_idx < cols:
+                                        if not covered[r_idx][col_idx]:
+                                            r_span, c_span = spans[r_idx][col_idx]
+                                            next_c = col_idx + 1
+                                            while next_c < cols:
+                                                # Merge next_c if it is empty, not covered, not matched to a drawing, and has same r_span
+                                                if (not covered[r_idx][next_c] and 
+                                                    (table_data[r_idx][next_c].strip() == "") and 
+                                                    (r_idx, next_c) not in cell_drawings and
+                                                    spans[r_idx][next_c][0] == r_span):
+                                                    
+                                                    # Merge next_c into col_idx for all rows in the vertical span
+                                                    for rx in range(r_idx, r_idx + r_span):
+                                                        covered[rx][next_c] = True
+                                                        table_data[rx][next_c] = ""
+                                                    
+                                                    c_span += 1
+                                                    spans[r_idx][col_idx] = (r_span, c_span)
+                                                    next_c += 1
+                                                else:
+                                                    break
+                                            col_idx += c_span
+                                        else:
+                                            col_idx += 1
+                                
+                                # 2. Populate and merge cells in Word
+                                for r_idx in range(rows):
+                                    for col_idx in range(cols):
+                                        if not covered[r_idx][col_idx]:
+                                            r_span, c_span = spans[r_idx][col_idx]
+                                            cell = table.cell(r_idx, col_idx)
+                                            cell_text = table_data[r_idx][col_idx] if col_idx < len(table_data[r_idx]) else ""
+                                            
+                                            # Perform merge if row span or col span is greater than 1
+                                            if r_span > 1 or c_span > 1:
+                                                target_cell = table.cell(r_idx + r_span - 1, col_idx + c_span - 1)
+                                                cell = cell.merge(target_cell)
+                                                
+                                            # Check if there is a matched drawing for this cell
+                                            d = cell_drawings.get((r_idx, col_idx))
+                                            if d:
+                                                try:
+                                                    cropped = _crop_drawing(pages[i], d.get("bbox"), pad_px=20)
+                                                    if cropped:
+                                                        usable_w_cm = 21.0 - 2.0 * pm
+                                                        col_w_cm = (usable_w_cm / cols) * c_span
+                                                        img_w_cm = max(2.0, min(col_w_cm * 0.85, 5.0 * c_span))
+                                                        
+                                                        with Image.open(cropped) as ci:
+                                                            nat_w, nat_h = ci.size
+                                                        aspect = nat_h / nat_w if nat_w > 0 else 0.5
+                                                        img_h_cm = img_w_cm * aspect
+                                                        
+                                                        p = cell.paragraphs[0]
+                                                        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                                                        run = p.add_run()
+                                                        run.add_picture(cropped, width=Cm(img_w_cm), height=Cm(img_h_cm))
+                                                except Exception as e:
+                                                    print(f"  [DOCX] Cell drawing failed: {e}")
+                                            else:
+                                                cell.text = cell_text
+                                                
+                                                # Formatting: center headers, use dynamic font size to prevent overflow
+                                                for paragraph in cell.paragraphs:
+                                                    if r_idx == 0:
+                                                        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                                                    for run in paragraph.runs:
+                                                        run.font.name = font_family if font_family else "Calibri"
+                                                        run.font.size = Pt(9.5) if rows > 5 else Pt(11)
+                                                        if r_idx == 0:
+                                                            run.font.bold = True
                                 
                                 # Add space after table
                                 doc.add_paragraph().paragraph_format.space_after = Pt(8)
-                                print(f"  [DOCX] Table element: {rows}x{cols}")
+                                print(f"  [DOCX] Table element: {rows}x{cols} (with vertical merges)")
+                                table_idx += 1
 
                     else:  # "text"
+                        txt = el.get("text", "")
+                        fsize = float(el.get("font_size_pt", 12))
+                        sp_before = float(el.get("space_before_pt", 0))
+                        sp_after = float(el.get("space_after_pt", 4))
+                        
+                        is_note, is_metadata = _classify_text_element(txt)
+                        if is_note:
+                            fsize = 8.5
+                            sp_before = 1
+                            sp_after = 2
+                        elif is_metadata:
+                            fsize = 9.5
+                            sp_before = 1
+                            sp_after = 2
+
                         para = doc.add_paragraph()
-                        run  = para.add_run(el.get("text", ""))
+                        run  = para.add_run(txt)
                         _apply_run(
-                            run, "Calibri",
-                            el.get("font_size_pt", 12),
+                            run, font_family,
+                            fsize,
                             el.get("bold", False),
                             el.get("italic", False),
                             el.get("underline", False),
@@ -1125,8 +2104,8 @@ async def convert(
                             para,
                             el.get("alignment", "left"),
                             ls,
-                            el.get("space_before_pt", 0),
-                            el.get("space_after_pt", 4),
+                            sp_before,
+                            sp_after,
                             el.get("first_line_indent_cm", 0.0),
                             el.get("left_indent_cm", 0.0),
                         )
@@ -1172,9 +2151,13 @@ async def convert(
         if use_auto:
             for pg_path in pages:
                 elements, meta = run_ocr_auto(pg_path)
-                margin_pts = max(28, meta.get("page_margin_cm", 2.54) * PT_PER_CM)
+                has_table = any(el.get("type") == "table" for el in elements)
+                margin_cm = 1.5 if has_table else meta.get("page_margin_cm", 2.54)
+                margin_pts = max(28, margin_cm * PT_PER_CM)
                 usable_w   = page_w - 2 * margin_pts
                 ls         = meta.get("line_spacing", 1.15)
+                page_drawings = [item for item in elements if item.get("type") == "drawing"]
+                pre_scan_match_drawings(elements, page_w, page_h, margin_pts)
 
                 # Single pass: render text AND drawings in order, top to bottom
                 y = page_h - margin_pts
@@ -1229,11 +2212,13 @@ async def convert(
                     if etype == "table":
                         table_data = el.get("data", [])
                         y -= 6
-                        y = _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h)
+                        y = _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=el.get("borderless", False), drawings=page_drawings, pg_path=pg_path, table_el=el)
                         print(f"  [PDF] Table element")
                         continue
 
                     if etype == "drawing":
+                        if el.get("consumed", False):
+                            continue
                         # Place drawing inline at current y, advance y by height consumed
                         consumed = _pdf_place_drawing_inline(
                             c, pg_path, el.get("bbox"), y,
@@ -1242,7 +2227,7 @@ async def convert(
                         y -= consumed
                         continue
 
-                    # text element
+                    # text element — with word-wrap for long lines
                     txt       = el.get("text", "")
                     fsize     = float(el.get("font_size_pt", 12))
                     bold      = el.get("bold", False)
@@ -1253,7 +2238,21 @@ async def convert(
                     left_i    = el.get("left_indent_cm", 0.0) * PT_PER_CM
                     sp_before = float(el.get("space_before_pt", 0))
                     sp_after  = float(el.get("space_after_pt", 4))
-                    leading   = fsize * ls
+                    
+                    # Dynamic compact layout for timetables and dense documents
+                    is_note, is_metadata = _classify_text_element(txt)
+                    if is_note:
+                        fsize = 8.5
+                        sp_before = 1
+                        sp_after = 2
+                        leading = fsize * 1.1
+                    elif is_metadata:
+                        fsize = 9.5
+                        sp_before = 1
+                        sp_after = 2
+                        leading = fsize * 1.15
+                    else:
+                        leading   = fsize * ls
 
                     font_name = _rl_font(bold, italic)
 
@@ -1262,16 +2261,44 @@ async def convert(
                         c.showPage()
                         y = page_h - margin_pts
 
-                    x = margin_pts + indent + left_i
-                    if align == "center":
-                        tw = c.stringWidth(txt, font_name, fsize)
-                        x  = margin_pts + (usable_w - tw) / 2
-                    elif align == "right":
-                        tw = c.stringWidth(txt, font_name, fsize)
-                        x  = margin_pts + usable_w - tw
+                    # ── Word-wrap long lines to fit page width ──
+                    line_x_base = margin_pts + indent + left_i
+                    avail_w = usable_w - indent - left_i
 
-                    _pdf_draw_text(c, txt, x, y, font_name, fsize, underline)
-                    y -= leading + sp_after
+                    # Split into wrapped sub-lines
+                    words = txt.split(" ")
+                    wrapped_lines = []
+                    cur_line = ""
+                    for word in words:
+                        test = (cur_line + " " + word).strip()
+                        if c.stringWidth(test, font_name, fsize) <= avail_w:
+                            cur_line = test
+                        else:
+                            if cur_line:
+                                wrapped_lines.append(cur_line)
+                            cur_line = word
+                    if cur_line:
+                        wrapped_lines.append(cur_line)
+                    if not wrapped_lines:
+                        wrapped_lines = [txt]
+
+                    for li, wline in enumerate(wrapped_lines):
+                        if y < margin_pts:
+                            c.showPage()
+                            y = page_h - margin_pts
+
+                        tw = c.stringWidth(wline, font_name, fsize)
+                        if align == "center":
+                            x = margin_pts + (usable_w - tw) / 2
+                        elif align == "right":
+                            x = margin_pts + usable_w - tw
+                        else:
+                            x = line_x_base
+
+                        _pdf_draw_text(c, wline, x, y, font_name, fsize, underline)
+                        y -= leading
+
+                    y -= sp_after
 
                     if y < margin_pts:
                         c.showPage()

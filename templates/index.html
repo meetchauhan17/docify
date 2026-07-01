@@ -53,7 +53,49 @@
                 <h1 style="font-size: 3rem;">SYSTEM_OVERRIDE</h1>
             </div>
             <p class="subtitle" style="color: var(--muted-foreground); margin-top: 1rem;">Upload handwriting or scanned PDF — neural net reads text &amp; replicates formatting.</p>
-        </header>
+
+            <!-- API Status Badge -->
+            <div id="api-status-bar" style="display:flex;align-items:center;justify-content:center;gap:0.6rem;margin-top:0.75rem;flex-wrap:wrap;">
+                <span style="font-size:0.7rem;color:var(--muted-foreground);font-family:var(--font-mono);letter-spacing:0.05em;">AI ENGINE:</span>
+                <span id="api-badge-gemini" class="api-badge" title="Gemini API">⬡ GEMINI</span>
+                <span id="api-badge-groq" class="api-badge api-badge--dim" title="Groq API (fallback)">⬡ GROQ</span>
+                <span id="api-badge-openrouter" class="api-badge api-badge--dim" title="OpenRouter (fallback)">⬡ OPENROUTER</span>
+            </div>
+            <style>
+                .api-badge {
+                    font-size: 0.65rem;
+                    font-family: var(--font-mono, monospace);
+                    letter-spacing: 0.08em;
+                    padding: 0.2rem 0.55rem;
+                    border-radius: 999px;
+                    border: 1px solid rgba(0,255,136,0.25);
+                    color: rgba(0,255,136,0.85);
+                    background: rgba(0,255,136,0.07);
+                    transition: all 0.3s ease;
+                    cursor: default;
+                }
+                .api-badge--dim {
+                    color: rgba(255,255,255,0.2);
+                    border-color: rgba(255,255,255,0.1);
+                    background: transparent;
+                }
+                .api-badge--active {
+                    color: #00ff88;
+                    border-color: rgba(0,255,136,0.6);
+                    background: rgba(0,255,136,0.12);
+                    box-shadow: 0 0 8px rgba(0,255,136,0.3);
+                }
+                .api-badge--warn {
+                    color: #ffb800;
+                    border-color: rgba(255,184,0,0.5);
+                    background: rgba(255,184,0,0.08);
+                }
+                .api-badge--error {
+                    color: #ff4444;
+                    border-color: rgba(255,68,68,0.4);
+                    background: rgba(255,68,68,0.07);
+                }
+            </style>
 
         <main class="main-content" style="max-width: 800px; margin: 0 auto; width: 100%;">
             <div class="card main-panel" style="padding: 2rem;">
@@ -279,6 +321,7 @@
                             Analysing handwriting formatting with AI...<br>
                             <span class="loading-subtext">This may take 15–30 seconds for large pages.</span>
                         </p>
+                        <p id="loading-provider" style="font-size:0.7rem;font-family:var(--font-mono,monospace);color:var(--muted-foreground);margin-top:0.5rem;letter-spacing:0.05em;"></p>
                     </div>
 
                 </form>
@@ -307,5 +350,56 @@
     <script src="/static/js/theme.js"></script>
     <script src="/static/js/main.js"></script>
     <script>lucide.createIcons();</script>
+
+    <!-- API Status Polling -->
+    <script>
+    (function() {
+        const PROVIDERS = ['gemini', 'groq', 'openrouter'];
+        const STATUS_CLASS = {
+            'ok':              'api-badge--active',
+            'unknown':         '',
+            'quota_exceeded':  'api-badge--warn',
+            'overloaded':      'api-badge--warn',
+            'error':           'api-badge--error',
+            'not_configured':  'api-badge--dim',
+        };
+
+        function updateBadges(data) {
+            PROVIDERS.forEach(p => {
+                const el = document.getElementById('api-badge-' + p);
+                if (!el) return;
+                const info = data.providers[p] || {};
+                const status = info.status || 'unknown';
+                // Remove all state classes
+                el.classList.remove('api-badge--active','api-badge--dim','api-badge--warn','api-badge--error');
+                // Apply new state class
+                const cls = STATUS_CLASS[status] || '';
+                if (cls) el.classList.add(cls);
+
+                // Tooltip
+                let tip = p.toUpperCase() + ': ' + status.replace(/_/g,' ');
+                if (p === 'gemini' && info.key_count > 1) tip += ' (' + info.key_count + ' keys)';
+                el.title = tip;
+            });
+
+            // Show last used provider in loading text
+            const lp = document.getElementById('loading-provider');
+            if (lp && data.last_provider && data.last_provider !== 'none') {
+                lp.textContent = 'ACTIVE ENGINE: ' + data.last_provider.toUpperCase();
+            }
+        }
+
+        function pollStatus() {
+            fetch('/api-status')
+                .then(r => r.json())
+                .then(updateBadges)
+                .catch(() => {}); // silent on network error
+        }
+
+        // Poll on load + every 10 seconds
+        pollStatus();
+        setInterval(pollStatus, 10000);
+    })();
+    </script>
 </body>
 </html>
