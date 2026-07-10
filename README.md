@@ -2,16 +2,20 @@
 
 # Docify AI
 
-**High-fidelity handwriting-to-document conversion powered by Google Gemini**
+**High-fidelity handwriting-to-document conversion powered by Google Gemini and multi-provider vision models**
 
-[![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Python Version](https://img.shields.io/badge/Python-3.9%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Gemini](https://img.shields.io/badge/Gemini-2.5%20Flash-4285F4?style=flat-square&logo=google&logoColor=white)](https://ai.google.dev/)
-[![ReportLab](https://img.shields.io/badge/ReportLab-PDF-E74C3C?style=flat-square)](https://www.reportlab.com/)
-[![python-docx](https://img.shields.io/badge/python--docx-DOCX-2E86AB?style=flat-square)](https://python-docx.readthedocs.io/)
+[![Groq](https://img.shields.io/badge/Groq-Llama%204%20Scout-F55036?style=flat-square)](https://groq.com/)
+[![OpenRouter](https://img.shields.io/badge/OpenRouter-Free%20Vision-7E22CE?style=flat-square)](https://openrouter.ai/)
+[![ReportLab](https://img.shields.io/badge/ReportLab-PDF%20Engine-E74C3C?style=flat-square)](https://www.reportlab.com/)
+[![python-docx](https://img.shields.io/badge/python--docx-DOCX%20Engine-2E86AB?style=flat-square)](https://python-docx.readthedocs.io/)
+[![Code Style](https://img.shields.io/badge/Code%20Style-Black-000000?style=flat-square)](https://github.com/psf/black)
+[![Platform Support](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square)](#installation-guide)
 [![License](https://img.shields.io/badge/License-MIT-8E44AD?style=flat-square)](LICENSE)
 
-Docify AI converts scanned handwritten notes, image photographs, and multi-page PDFs into structured, editable Microsoft Word (`.docx`) and PDF (`.pdf`) documents. It preserves the original layout, paragraph hierarchy, formatting styles, tables, and inline hand-drawn diagrams with surgical precision.
+Docify AI converts scanned handwritten notes, photographic records, and multi-page PDF files into highly structured, fully editable Microsoft Word (.docx) and PDF (.pdf) documents. By executing layout analysis and OCR inside unified multimodal visual prompts, the application reproduces paragraph styles, font hierarchies, mathematical equations, data tables, and inline drawing sketches with optimal structural preservation.
 
 </div>
 
@@ -19,231 +23,287 @@ Docify AI converts scanned handwritten notes, image photographs, and multi-page 
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Core Capabilities](#core-capabilities)
-- [Technology Stack](#technology-stack)
 - [System Architecture](#system-architecture)
-  - [1. Image Preprocessing](#1-image-preprocessing)
-  - [2. Consolidated Multimodal API Call](#2-consolidated-multimodal-api-call)
-  - [3. Pydantic Schema Validation](#3-pydantic-schema-validation)
-  - [4. Element Mapping and Document Assembly](#4-element-mapping-and-document-assembly)
-  - [5. Resilience and Fallback Strategy](#5-resilience-and-fallback-strategy)
-- [Document Element Types](#document-element-types)
-- [Text Tag Classification](#text-tag-classification)
+- [Core Capabilities](#core-capabilities)
+- [Multi-Provider Resilience Framework](#multi-provider-resilience-framework)
+- [Image Preprocessing and OCR Caching](#image-preprocessing-and-ocr-caching)
+- [Pydantic Layout Schema](#pydantic-layout-schema)
+- [Element Mapping and Output Assembly](#element-mapping-and-output-assembly)
+- [Technology Stack](#technology-stack)
 - [Directory Structure](#directory-structure)
 - [Installation Guide](#installation-guide)
   - [Prerequisites](#prerequisites)
-  - [Step-by-Step Setup](#step-by-step-setup)
+  - [Installing Poppler](#installing-poppler)
+  - [Step-by-Step Installation](#step-by-step-installation)
 - [Running the Application](#running-the-application)
-- [Web Interface](#web-interface)
+- [Web Interface Reference](#web-interface-reference)
 - [API Reference](#api-reference)
   - [POST /convert](#post-convert)
-  - [GET /history](#get-history)
 - [Configuration Reference](#configuration-reference)
-- [Development Notes](#development-notes)
-- [Known Limitations](#known-limitations)
 - [License](#license)
-
----
-
-## Overview
-
-Traditional OCR engines produce flat, unformatted raw text strips that discard the document's visual hierarchy entirely. Docify AI takes a fundamentally different approach — it uses a single multimodal API call per page that simultaneously performs text transcription and spatial layout analysis.
-
-The Gemini 2.5 Flash model analyzes the image holistically and returns a validated JSON object that describes every element in the document: its reading order position, content type, text formatting, table grid structure, or drawing bounding box. The backend then assembles the output document natively using these coordinates and formatting properties, producing output files that closely match the original handwritten layout.
-
----
-
-## Core Capabilities
-
-- **Consolidated OCR and Layout Analysis**: Text transcription and spatial layout detection happen in a single Gemini API request per page, reducing API consumption by 50% compared to two-pass systems.
-- **Rich Text Formatting Reconstruction**: Headings, sub-headings, body text, bullet lists, centered lines, and underlined text are each assigned appropriate font sizes, weights, and paragraph spacing automatically.
-- **Bold, Italic, and Underline Detection**: The model inspects character stroke weight, slant, and decorations independently per text element, overriding or blending with tag-level defaults.
-- **Math and Equation Alignment**: Multi-line equations are parsed for the `=` operator position and padded with non-breaking spaces so vertical alignment is preserved in the output document.
-- **Native Table Reconstruction**: Hand-drawn tables are extracted as structured 2D grids and inserted as native DOCX `Table Grid` cells or dynamically width-calculated ReportLab PDF rectangles.
-- **Inline Diagram and Drawing Preservation**: Diagrams, flowcharts, and graphs are detected with normalized bounding boxes, cropped from the source image, and inserted inline at the exact reading-order position in both DOCX and PDF output.
-- **Unicode Arrow and Bracket Rendering**: Simple single arrows and grouping brackets are converted directly to Segoe UI Symbol unicode characters rather than image files, producing clean, scalable glyphs.
-- **Model Failover with Exponential Backoff**: On HTTP 503 / UNAVAILABLE errors, the system retries up to 4 times with exponential delays (4s, 8s, 16s, 32s), then automatically falls back to the `gemini-2.0-flash` model before raising an error.
-- **Plain OCR Fallback**: If the structured JSON call fails entirely, a plain-text OCR pass is attempted using a simpler prompt and a prefix-based line parser, ensuring a result is always returned.
-- **Auto-detect and Manual Override Modes**: Users can choose to let the model drive all formatting decisions, or manually select font family, font size, line spacing, text alignment, and page margins from the UI.
-
----
-
-## Technology Stack
-
-| Layer | Library / Service | Purpose |
-| :--- | :--- | :--- |
-| AI / Vision | `google-genai` v1.65+ (Gemini 2.5 Flash) | Multimodal OCR, layout analysis, structured JSON output |
-| Web Framework | `FastAPI` | REST API endpoints and server-side page routing |
-| ASGI Server | `uvicorn` | ASGI application server |
-| Templating | `Jinja2` | HTML page rendering |
-| Word Documents | `python-docx` | Paragraph, run, table, and image insertion into `.docx` |
-| PDF Documents | `ReportLab` | Canvas-based text, table, and image rendering into `.pdf` |
-| Image Processing | `Pillow` (PIL) | Image mode conversion, upscaling, cropping |
-| PDF Input | `pdf2image` | Multi-page PDF to per-page PNG image conversion |
-| Data Validation | `pydantic` v2 | JSON schema enforcement on Gemini responses |
-| Environment | `python-dotenv` | Loading API credentials from `.env` |
-| Frontend | HTML5, Vanilla CSS, Vanilla JavaScript | UI pages: landing, convert, history, about, login |
 
 ---
 
 ## System Architecture
 
+The following diagram illustrates the lifecycle of a document processing request from file upload to final artifact download, highlighting the pre-processing steps, API provider failover tree, elements assembly, and format rendering.
+
 ```mermaid
 flowchart TD
-    A([User Uploads File\nImage or PDF]) --> B{File Type?}
-    B -- PDF --> C[pdf2image\nSplit into per-page PNGs]
-    B -- Image --> D[Direct Load with Pillow]
-    C --> E[_preprocess_for_ocr\nRGB conversion\nUpscale if width < 1600px]
+    A([User Uploads Document\nImage or PDF]) --> B{File Type?}
+    B -- PDF --> C[pdf2image\nExtract per-page PNGs]
+    B -- Image --> D[Load Image via Pillow]
+    C --> E[Image Preprocessing\nRGB conversion\nLanczos upscaling if width < 1600px]
     D --> E
 
-    E --> F[Gemini 2.5 Flash\nCombined Multimodal Call\nCOMBINED_OCR_PROMPT +\nDocumentLayout schema]
+    E --> F[Master API Dispatcher\n_call_vision_api]
+    
+    F --> G{Gemini Keys Available?}
+    G -- Yes --> H[Call Gemini API\ngemini-2.5-flash / 2.0-flash]
+    H --> I{Success?}
+    I -- Yes --> V[DocumentLayout JSON]
+    I -- No: Quota 429 --> J[Rotate Gemini Key\nRetry up to key count]
+    J --> H
+    I -- No: Overload 503 --> K[Exponential Backoff\nSwitch to gemini-2.0-flash]
+    K --> H
+    
+    G -- No / Gemini Exhausted --> L{Groq API Key Configured?}
+    L -- Yes --> M[Call Groq Vision API\nllama-4-scout-17b / llama-3.2-90b]
+    M --> N{Success?}
+    N -- Yes --> V
+    N -- No --> O[Try Next Groq Model / Fail]
+    
+    L -- No / Groq Exhausted --> P{OpenRouter Configured?}
+    P -- Yes --> Q[Call OpenRouter Vision API\nqwen2.5-vl-72b / llama-3.2-11b]
+    Q --> R{Success?}
+    R -- Yes --> V
+    R -- No --> S[Try Next OpenRouter Model / Fail]
+    
+    P -- No / All Exhausted --> T[Plain OCR Fallback\nPLAIN_OCR_PROMPT]
+    T --> U[Line-by-Line Regex Parser\n_parse_text_lines]
+    U --> W[Mapped Elements List]
 
-    F --> G{HTTP 503?}
-    G -- Yes up to 4 retries --> H[Exponential Backoff\n4s / 8s / 16s / 32s]
-    H --> F
-    G -- Exhausted --> I[Switch to gemini-2.0-flash\nFallback Model]
-    I --> F
-    G -- No / Success --> J[DocumentLayout JSON\nPydantic Validated]
-
-    J --> K[Element Mapper\nrun_ocr_auto]
-    K --> L{Element Type?}
-    L -- text --> M[Map tag to bold/size/spacing\nMerge model overrides]
-    L -- table --> N[2D row/cell grid]
-    L -- drawing --> O{Simple Shape?}
-    O -- Arrow --> P[Unicode arrow char\nSegoe UI Symbol]
-    O -- Bracket --> Q[Unicode bracket char\nSegoe UI Symbol]
-    O -- Complex --> R[_crop_drawing\nbbox crop to temp PNG]
-    L -- blank_line --> S[Spacer element]
-
-    M --> T[Document Builder]
-    N --> T
-    P --> T
-    Q --> T
-    R --> T
+    V --> W
+    
+    W --> X[Element Mapping\nrun_ocr_auto]
+    X --> Y{Element Type?}
+    Y -- text --> Z[Apply Typography Styles\nHEADING / SUBHEAD / BODY / BULLET / CENTER / UNDERLN]
+    Y -- table --> AA[Verify Cell Dimensions\nResolve Rowspans & Colspans]
+    Y -- drawing --> AB{Visual Shape?}
+    AB -- Arrow --> AC[Render Segoe UI Symbol\nUnicode arrow glyph]
+    AB -- Bracket --> AD[Render Segoe UI Symbol\nUnicode bracket glyph]
+    AB -- Sketch --> AE[_crop_drawing\nCrop bounding box to PNG]
+    Y -- blank_line --> AF[Insert Paragraph Spacer]
+    
+    Z --> AG[Document Assembly Engine]
+    AA --> AG
+    AC --> AG
+    AD --> AG
+    AE --> AG
+    AF --> AG
+    
+    AG --> AH{Selected Format?}
+    AH -- DOCX --> AI[python-docx Generation\nTables, Runs, Inline Pics]
+    AH -- PDF --> AJ[ReportLab Canvas Generation\nWrapped Text, Custom Drawing coordinates]
+    
+    AI --> AK([Download output.docx])
+    AJ --> AL([Download output.pdf])
+    O --> T
     S --> T
-
-    T --> U{Output Format?}
-    U -- DOCX --> V[python-docx\nParagraph + Table + Inline Image]
-    U -- PDF --> W[ReportLab Canvas\nText + Table + Placed Image]
-
-    V --> X([Download .docx])
-    W --> Y([Download .pdf])
 ```
 
-### 1. Image Preprocessing
+---
 
-The function `_preprocess_for_ocr` normalizes input before passing it to Gemini:
+## Core Capabilities
 
-- Converts any image mode (L, RGBA, P, CMYK) to standard `RGB`.
-- Upscales images narrower than **1600 pixels** using `LANCZOS` high-quality resampling so fine handwriting details are preserved for the vision model.
-- Deliberately avoids applying aggressive sharpening, contrast stretching, or binary thresholding — techniques that help traditional OCR engines but can destroy fine stroke variations that Gemini's multimodal encoder relies upon.
+- **Unified Layout Analysis**: Document layout mapping and handwriting transcription are completed in a single multimodal request, avoiding multiple passes and reducing token fees.
+- **Dynamic Hierarchy Construction**: The model assigns structural tags (HEADING, SUBHEAD, BODY, BULLET, CENTER, UNDERLN) and calculates typographical margins, font scaling, alignments, and spacings.
+- **Refined Text Styling**: Stroke weight, slant, and underline patterns are analyzed at the character run level, applying bold, italic, and underline settings onto the default styles.
+- **Smart Alignment for Math**: Multi-line equations and mathematical expressions are centered and aligned around equality operators using calculated padding spaces.
+- **Structural Table Recreation**: Extracts borderless and grid tables, dynamically merging cell matrices using rowspan/colspan attributes to handle complex structures.
+- **Embedded Sketch Cropping**: Bounding coordinates for sketches, charts, and signatures are cropped out of the original high-resolution inputs and re-embedded inline in their correct reading order.
+- **Arrow and Bracket Mapping**: Maps simple hand-drawn arrow vectors and enclosing braces directly into scalable Unicode symbols (Segoe UI Symbol), reducing output file size.
+- **Layout Customization and Overrides**: Provides toggle controls between auto-layout detection and manual typography overrides (font size, style, margins, alignment) via the web client.
 
-### 2. Consolidated Multimodal API Call
+---
 
-The `COMBINED_OCR_PROMPT` is a structured instruction set sent alongside the image in a single `client.models.generate_content` call. It instructs Gemini to:
+## Multi-Provider Resilience Framework
 
-- Transcribe all text with **100% fidelity** — preserving capitalization, abbreviations, math symbols, superscripts, and subscripts. Illegible words are replaced with `[?]`.
-- Assign a semantic **tag** to each line (`HEADING`, `SUBHEAD`, `BODY`, `BULLET`, `CENTER`, `UNDERLN`).
-- Detect **bold**, **italic**, and **underline** formatting independently per element.
-- Estimate **left indentation** in centimeters (e.g., `0.5 cm` for bullet points).
-- Identify **tables** and extract their cell content into 2D row-column arrays.
-- Locate **drawings** and return normalized bounding boxes `[x1, y1, x2, y2]` as fractions of image dimensions.
-- Classify simple drawings as arrows or brackets and provide directional/side metadata.
-- Estimate overall **page margin** (in cm) and **line spacing** multiplier.
-- Return elements in strict **top-to-bottom, left-to-right reading order**.
+To ensure high availability under resource limits and API rate constraints, Docify AI implements a multi-provider fallback hierarchy:
 
-The call is configured at `temperature=0.1` for maximum OCR determinism:
+1. **Gemini API (Primary)**:
+   - Utilizes `gemini-2.5-flash` for high-speed structured JSON generation using schema validation.
+   - Implements **API Key Rotation**: Accepts a comma-separated list of keys in `GEMINI_API_KEY` and switches to the next key on 429 quota exhaustion.
+   - Implements **Model Failover**: Falls back to `gemini-2.0-flash` on prolonged 503 service unavailability.
+   - Retries failed requests up to 4 times with exponential backoff delays (4s, 8s, 16s, 32s).
 
-```python
-config = genai_types.GenerateContentConfig(
-    response_mime_type="application/json",
-    response_schema=DocumentLayout,
-    temperature=0.1,
-)
-```
+2. **Groq API (First Fallback)**:
+   - Triggered automatically if all Gemini keys/models fail or are unconfigured.
+   - Interrogates vision models in sequence:
+     - `meta-llama/llama-4-scout-17b-16e-instruct`
+     - `meta-llama/llama-4-maverick-17b-128e-instruct`
+     - `llama-3.2-90b-vision-preview`
+     - `llama-3.2-11b-vision-preview`
+   - Dynamically injects Pydantic schema requirements as JSON instructions for models that do not natively support structured outputs.
 
-### 3. Pydantic Schema Validation
+3. **OpenRouter API (Second Fallback)**:
+   - Active if Groq and Gemini fail or are unconfigured.
+   - Rotates through free high-capacity vision models:
+     - `qwen/qwen2.5-vl-72b-instruct:free`
+     - `qwen/qwen2-vl-7b-instruct:free`
+     - `meta-llama/llama-3.2-11b-vision-instruct:free`
+     - `google/gemini-2.0-flash-exp:free`
 
-Gemini is constrained to produce a valid `DocumentLayout` JSON object by passing the Pydantic model as `response_schema`. This guarantees the response structure without any regex parsing:
+4. **Plain OCR and RegEx Fallback**:
+   - If structured output calls fail across all APIs, Docify AI requests unstructured, line-by-line transcription.
+   - The backend processes the output using regular expressions and prefix mapping (`_parse_text_lines`) to build a clean text layout.
+
+---
+
+## Image Preprocessing and OCR Caching
+
+### Image Preprocessing
+Before submission to the vision models, images are processed using standard Pillow transformations:
+- **RGB Normalization**: Converts input color spaces (RGBA, CMYK, Palette, Grayscale) into standardized three-channel RGB color values.
+- **Lanczos Upscaling**: Small images (width under 1600px) are scaled up using Lanczos filters to make handwritten text clearer for the models.
+- **Filter Avoidance**: The engine avoids aggressive sharpening or thresholding to preserve the visual context needed for multimodal comprehension.
+
+### Server-Side OCR Caching
+To reduce API overhead and accelerate response times, Docify AI runs a file-hash caching database:
+- Computes an MD5 checksum of the processed image file.
+- Saves the extracted OCR layout and metadata in JSON format as `uploads/ocr_cache_[MD5_HASH].json`.
+- Subsequent conversions of the same document load the parsed structure from the local cache instantly.
+
+---
+
+## Pydantic Layout Schema
+
+Gemini responses are validated against a strict Pydantic model configuration:
 
 ```python
 class DocElement(BaseModel):
-    type: str          # 'text' | 'blank_line' | 'table' | 'drawing'
-    text: Optional[str]
-    tag: Optional[str] # 'HEADING' | 'SUBHEAD' | 'BODY' | 'BULLET' | 'CENTER' | 'UNDERLN'
-    bold: Optional[bool]
-    italic: Optional[bool]
-    underline: Optional[bool]
-    alignment: Optional[str]          # 'left' | 'center' | 'right' | 'justify'
-    left_indent_cm: Optional[float]
-    table_data: Optional[List[List[str]]]
-    bbox: Optional[List[float]]       # [x1, y1, x2, y2] normalized 0.0–1.0
-    description: Optional[str]
-    is_simple_arrow: Optional[bool]
-    arrow_direction: Optional[str]    # 'right' | 'left' | 'up' | 'down' | diagonals
-    is_simple_bracket: Optional[bool]
-    bracket_style: Optional[str]      # 'curly' | 'square' | 'plain'
-    bracket_side: Optional[str]       # 'left' | 'right'
+    type: str = Field(
+        ...,
+        description="The type of the element. Must be one of: 'text', 'blank_line', 'table', 'drawing'."
+    )
+    text: Optional[str] = Field(
+        None,
+        description="The transcribed text content of the line or paragraph."
+    )
+    tag: Optional[str] = Field(
+        None,
+        description="The formatting tag for text elements: 'HEADING' (major title), 'SUBHEAD' (section label), 'BODY' (normal paragraph), 'BULLET' (list item), 'CENTER' (visually centered line), 'UNDERLN' (underlined text)."
+    )
+    bold: Optional[bool] = Field(
+        None,
+        description="True if the text is bold or written significantly darker than normal."
+    )
+    italic: Optional[bool] = Field(
+        None,
+        description="True if the text is italicized."
+    )
+    underline: Optional[bool] = Field(
+        None,
+        description="True if the text is underlined."
+    )
+    alignment: Optional[str] = Field(
+        None,
+        description="Text alignment: 'left', 'center', 'right', 'justify'."
+    )
+    left_indent_cm: Optional[float] = Field(
+        None,
+        description="Estimated left indentation of the text element in centimeters."
+    )
+    table_data: Optional[List[List[str]]] = Field(
+        None,
+        description="A list of rows representing the cells of the table."
+    )
+    borderless: Optional[bool] = Field(
+        None,
+        description="True if the table is a layout grid and should be rendered without visible borders."
+    )
+    bbox: Optional[List[float]] = Field(
+        None,
+        description="Normalized bounding box [x1, y1, x2, y2] (0.0 to 1.0) of the drawing in the image."
+    )
+    description: Optional[str] = Field(
+        None,
+        description="A brief description of the drawing or diagram."
+    )
+    is_simple_arrow: Optional[bool] = Field(
+        None,
+        description="True if the drawing is just a single plain hand-drawn arrow."
+    )
+    arrow_direction: Optional[str] = Field(
+        None,
+        description="Direction the arrow points: 'right', 'left', 'up', 'down', 'up-right', etc."
+    )
+    is_simple_bracket: Optional[bool] = Field(
+        None,
+        description="True if the drawing is just a single grouping bracket or brace."
+    )
+    bracket_style: Optional[str] = Field(
+        None,
+        description="The style of bracket: 'curly', 'square', 'plain'."
+    )
+    bracket_side: Optional[str] = Field(
+        None,
+        description="Which side the bracket appears relative to the text: 'left', 'right'."
+    )
 
 class DocumentLayout(BaseModel):
-    page_margin_cm: float   # default: 2.54
-    line_spacing: float     # 1.0 | 1.15 | 1.5 | 2.0
-    elements: List[DocElement]
+    page_margin_cm: float = Field(
+        default=2.54,
+        description="Estimated page margin in centimeters."
+    )
+    line_spacing: float = Field(
+        default=1.15,
+        description="Line spacing multiplier: 1.0, 1.15, 1.5, 2.0."
+    )
+    elements: List[DocElement] = Field(
+        ...,
+        description="The ordered list of all document elements from top to bottom."
+    )
 ```
 
-### 4. Element Mapping and Document Assembly
+---
 
-The `run_ocr_auto` function iterates the validated element list and maps each entry to an internal representation. Text elements blend tag-level defaults from `_PREFIX_MAP` with any model-level overrides the model detected (bold, italic, underline, alignment, indentation). This two-tier merge ensures maximum fidelity while maintaining consistent base formatting per tag type.
+## Element Mapping and Output Assembly
 
-The prefix defaults are:
+The table below outlines the default formatting rules used by the mapping controller when translating layout tags into document outputs:
 
-| Tag | Bold | Italic | Font Size | Alignment | Left Indent | Space Before | Space After |
+| Layout Tag | Base Weight | Slant | Font Size | Paragraph Alignment | Left Indent | Space Before | Space After |
 | :--- | :---: | :---: | :---: | :--- | :---: | :---: | :---: |
-| `HEADING` | Yes | No | 16 pt | left | 0.0 cm | 12 pt | 6 pt |
-| `SUBHEAD` | Yes | No | 13 pt | left | 0.0 cm | 8 pt | 4 pt |
-| `BODY` | No | No | 12 pt | left | 0.0 cm | 0 pt | 3 pt |
-| `BULLET` | No | No | 12 pt | left | 0.5 cm | 0 pt | 3 pt |
-| `CENTER` | No | No | 12 pt | center | 0.0 cm | 4 pt | 4 pt |
-| `UNDERLN` | No | No | 12 pt | left | 0.0 cm | 0 pt | 3 pt |
-| `TABLE` | No | No | 11 pt | left | 0.0 cm | 4 pt | 4 pt |
+| `HEADING` | Bold | Normal | 16 pt | Left | 0.0 cm | 12 pt | 6 pt |
+| `SUBHEAD` | Bold | Normal | 13 pt | Left | 0.0 cm | 8 pt | 4 pt |
+| `BODY` | Normal | Normal | 12 pt | Left | 0.0 cm | 0 pt | 3 pt |
+| `BULLET` | Normal | Normal | 12 pt | Left | 0.5 cm | 0 pt | 3 pt |
+| `CENTER` | Normal | Normal | 12 pt | Center | 0.0 cm | 4 pt | 4 pt |
+| `UNDERLN` | Normal | Normal | 12 pt | Left | 0.0 cm | 0 pt | 3 pt |
+| `TABLE` | Normal | Normal | 11 pt | Left | 0.0 cm | 4 pt | 4 pt |
 
-Drawings are handled by `_crop_drawing`, which applies the normalized bounding box to the original source image dimensions, crops the region, saves it as a temporary PNG, and then adds it inline (never floating) in the output document at the correct reading-order position.
-
-### 5. Resilience and Fallback Strategy
-
-The `_call_gemini` wrapper implements a layered resilience strategy:
-
-1. **Primary model**: `gemini-2.5-flash` — up to 5 attempts with exponential backoff on 503.
-2. **Fallback model**: `gemini-2.0-flash` — if the primary is still overloaded.
-3. **Plain OCR fallback**: If the structured JSON call fails entirely, a plain-text OCR prompt is used and the resulting text is parsed line-by-line using the prefix-based `_parse_text_lines` function.
-4. **Hard error fallback**: If all stages fail, a single error text element is inserted into the document so a file is always returned to the user.
+### Custom Processing Logic
+- **Signature Blocks**: Uses borderless tables with empty headers to place side-by-side signature components next to each other.
+- **Dynamic Text Shrinkage**: Footer notes and metadata blocks are scaled down to 8.5 pt and 9.5 pt dynamically to match professional layouts.
+- **Double Space Cleanup**: Cleans up multiple spaces and converts them to non-breaking spaces (`\xA0`) to keep formatting aligned.
 
 ---
 
-## Document Element Types
+## Technology Stack
 
-| Type | Description |
-| :--- | :--- |
-| `text` | A single line or logical paragraph with formatting metadata. |
-| `blank_line` | A vertical spacer between logical document sections. |
-| `table` | A 2D grid of row/column cell text extracted from a hand-drawn table. |
-| `drawing` | A diagram, flowchart, or sketch — embedded as a cropped image. |
-| `arrow` | A simple directional arrow — rendered as a Segoe UI Symbol unicode character. |
-| `bracket` | A grouping bracket or brace — rendered as a Segoe UI Symbol unicode character. |
-
----
-
-## Text Tag Classification
-
-| Tag | Description | Example |
-| :--- | :--- | :--- |
-| `HEADING` | Major document title, significantly larger or bolder than body text | `Chapter 3: Forces` |
-| `SUBHEAD` | Section label, slightly bolder and larger than body, below a heading | `1.1 Newton's Laws` |
-| `BODY` | Normal body paragraph text | `The formula is derived from...` |
-| `BULLET` | Bulleted or numbered list item, visually indented | `- First law: inertia` |
-| `CENTER` | Visually centered content such as a date, page number, or title | `June 2025` |
-| `UNDERLN` | Text with a drawn underline directly beneath it | `Important Note` |
+| Layer | Dependency | Version | Purpose |
+| :--- | :--- | :--- | :--- |
+| **API & Routing** | FastAPI | 0.110.0+ | Server framework and REST API endpoints |
+| **ASGI Engine** | Uvicorn | 0.28.0+ | Server runner and hot-reloader |
+| **Vision AI** | google-genai | 0.1.0+ | Gemini models SDK connection |
+| **Failover Models** | groq / openai | 0.5.0+ / 1.12.0+ | Fallback integration for secondary engines |
+| **PDF Extraction** | pypdfium2 | 4.28.0+ | Multi-page PDF layout splitter |
+| **Image Processing** | Pillow (PIL) | 10.2.0+ | Image sizing, formats, and canvas rendering |
+| **Word Generator** | python-docx | 1.1.0+ | Native XML Word layout builder |
+| **PDF Generator** | ReportLab | 4.1.0+ | Custom coordinates vector canvas generator |
+| **Data Validation** | Pydantic v2 | 2.6.0+ | JSON layout validation |
+| **Configuration** | python-dotenv | 1.0.0+ | Environment variables loader |
+| **Frontend UI** | HTML5 / CSS3 / JS | Native | Modern dark/light responsive interface |
 
 ---
 
@@ -251,30 +311,30 @@ The `_call_gemini` wrapper implements a layered resilience strategy:
 
 ```
 docify/
-├── main.py                  # Application entry point — all backend logic
-├── run.bat                  # Windows launcher script
-├── .env                     # API key configuration (not committed to Git)
-├── .gitignore               # Standard Git exclusions
-├── static/
+├── main.py                  # Core backend app: handles routing, vision, document generation
+├── run.bat                  # Windows runner script
+├── requirements.txt         # Project package dependencies
+├── .env                     # Configuration keys (excluded from source control)
+├── .gitignore               # Ignored files configuration
+├── static/                  # Shared client assets
 │   ├── css/
-│   │   ├── styles.css       # Converter page and shared styles
-│   │   └── landing.css      # Landing page styles
+│   │   ├── styles.css       # Main application styling (dark/light mode variables)
+│   │   └── landing.css      # Landing presentation style sheet
 │   └── js/
-│       ├── main.js          # Converter UI — upload, config, download
-│       ├── main_v2.js       # Prototype split-screen editor (inactive)
-│       ├── landing.js       # Landing page interactions
-│       ├── about.js         # About page interactions
-│       ├── history.js       # Conversion history list
-│       ├── login.js         # Login page logic
-│       └── theme.js         # Dark/light theme toggle
-├── templates/
-│   ├── landing.html         # Landing page
-│   ├── index.html           # Converter interface
-│   ├── about.html           # About page
-│   ├── history.html         # Conversion history
-│   └── login.html           # Login page
-├── uploads/                 # Temporary storage for uploaded files (git-ignored)
-└── outputs/                 # Generated .docx and .pdf files (git-ignored)
+│       ├── main.js          # Core interface logic: upload flow and parameter mapping
+│       ├── landing.js       # Animations and navigation for landing page
+│       ├── about.js         # Technical informational display operations
+│       ├── history.js       # client-side conversion history management
+│       ├── login.js         # Authorization layout functions
+│       └── theme.js         # Dynamic dark/light color scheme toggle controller
+├── templates/               # Server-side HTML render layouts
+│   ├── landing.html         # Front landing portal
+│   ├── index.html           # Core converter system page
+│   ├── about.html           # Developer about info page
+│   ├── history.html         # Saved conversion record logs page
+│   └── login.html           # Authentication portal page
+├── uploads/                 # Storage for source files and cropped sketches (ignored)
+└── outputs/                 # Storage for generated word/pdf download packages (ignored)
 ```
 
 ---
@@ -282,108 +342,124 @@ docify/
 ## Installation Guide
 
 ### Prerequisites
+- Python 3.9 or higher.
+- `pip` package manager.
+- **Poppler** utility binaries (required by `pdf2image` to extract pages from PDF files).
+- An API Key from [Google AI Studio](https://aistudio.google.com/).
+- Optional: Groq or OpenRouter API credentials for failover configurations.
 
-| Requirement | Notes |
-| :--- | :--- |
-| Python 3.9 or higher | Available at [python.org](https://www.python.org/downloads/) |
-| pip | Included with Python 3.9+ |
-| Poppler | Required by `pdf2image` for PDF page rendering |
-| Google Gemini API Key | Obtain at [aistudio.google.com](https://aistudio.google.com) |
+---
 
-**Installing Poppler:**
+### Installing Poppler
 
-- **Windows**: Download the latest [Poppler for Windows](https://github.com/oschwartz10612/poppler-windows/releases/) release. Extract the archive and add the `bin\` subdirectory to your system `PATH` environment variable.
-- **macOS**: `brew install poppler`
-- **Ubuntu / Debian**: `sudo apt-get install poppler-utils`
+#### Windows
+1. Download the latest pre-compiled binary package from [Poppler for Windows](https://github.com/oschwartz10612/poppler-windows/releases/).
+2. Extract the directory contents to an accessible path (e.g., `C:\poppler`).
+3. Add the path to the extracted `bin` folder (e.g., `C:\poppler\Library\bin` or `C:\poppler\bin`) to your system **Path** environment variable:
+   - Search for **Environment Variables** in the Windows taskbar.
+   - Under System Variables, click **Path** and select Edit.
+   - Click New and enter the path to the Poppler `bin` directory.
+   - Click OK to save the changes.
+4. Restart your terminal application to apply the new path settings.
 
-### Step-by-Step Setup
-
-**1. Clone the repository:**
-
+#### macOS
+Install poppler using the Homebrew package manager:
 ```bash
-git clone https://github.com/meetchauhan17/docify.git
-cd docify
+brew install poppler
 ```
 
-**2. Create a virtual environment:**
-
+#### Linux
+Install poppler using your distribution's package manager:
 ```bash
-python -m venv venv
+# Ubuntu / Debian
+sudo apt-get update
+sudo apt-get install -y poppler-utils
+
+# Fedora / CentOS
+sudo dnf install poppler-utils
 ```
 
-**3. Activate the virtual environment:**
+---
 
-```bash
-# Windows — PowerShell
-.\venv\Scripts\Activate.ps1
+### Step-by-Step Installation
 
-# Windows — Command Prompt
-.\venv\Scripts\activate.bat
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/meetchauhan17/docify.git
+   cd docify
+   ```
 
-# macOS / Linux
-source venv/bin/activate
-```
+2. **Establish a Python virtual environment**:
+   ```bash
+   python -m venv venv
+   ```
 
-**4. Install all dependencies:**
+3. **Activate the environment**:
+   - **Windows (PowerShell)**:
+     ```powershell
+     .\venv\Scripts\Activate.ps1
+     ```
+   - **Windows (CMD)**:
+     ```cmd
+     .\venv\Scripts\activate.bat
+     ```
+   - **macOS / Linux**:
+     ```bash
+     source venv/bin/activate
+     ```
 
-```bash
-pip install fastapi uvicorn python-docx reportlab pillow pdf2image google-genai pydantic python-dotenv jinja2 aiofiles
-```
+4. **Install Python dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-**5. Create the environment configuration file:**
+5. **Configure environment settings**:
+   Create a `.env` file in the project root:
+   ```env
+   # API Keys configuration (comma-separated for key rotation on Gemini)
+   GEMINI_API_KEY=key_one,key_two
+   
+   # Optional Fallback API Keys
+   GROQ_API_KEY=your_groq_api_key_here
+   OPENROUTER_API_KEY=your_openrouter_api_key_here
+   ```
 
-Create a file named `.env` in the project root directory:
-
-```env
-GEMINI_API_KEY=your_google_gemini_api_key_here
-```
-
-> The `.env` file is listed in `.gitignore` and will never be committed to version control.
-
-**6. Create required directories** (the application creates these automatically on startup, but you can create them manually):
-
-```bash
-mkdir uploads
-mkdir outputs
-```
+6. **Initialize folders**:
+   ```bash
+   mkdir uploads
+   mkdir outputs
+   ```
 
 ---
 
 ## Running the Application
 
-**Option A — Windows batch script:**
-
-```batch
+### Option A: Windows Launcher
+Run the setup batch file:
+```cmd
 run.bat
 ```
 
-**Option B — Direct uvicorn command:**
-
+### Option B: Manual CLI Run
+Start the Uvicorn ASGI server:
 ```bash
 uvicorn main:app --reload --port 8000
 ```
-
-Once the server is running, open your browser and navigate to:
-
-```
-http://localhost:8000
-```
-
-The `--reload` flag enables hot-reloading during development. Remove it in production.
+Open a web browser and navigate to `http://localhost:8000`.
 
 ---
 
-## Web Interface
+## Web Interface Reference
 
-Docify AI exposes a multi-page web interface served by FastAPI with Jinja2 templating.
+Docify AI exposes a multi-page web application served by FastAPI with Jinja2 templating:
 
-| Route | Page | Description |
+| Route Path | View Interface | Technical Role |
 | :--- | :--- | :--- |
-| `/` | Landing | Project overview, feature highlights, call to action |
-| `/convert` | Converter | File upload, format selection, formatting controls, download |
-| `/history` | History | Log of previous conversion requests |
-| `/about` | About | Technical details about the project |
-| `/login` | Login | Authentication page (UI present, backend auth optional) |
+| `/` | Landing page | Project overview, interactive features overview, and system portal access. |
+| `/convert` | Converter page | Main interface for file upload, format selector, auto/manual toggles, and processing triggers. |
+| `/history` | History page | Lists previous conversion records loaded client-side via browser `localStorage`. |
+| `/about` | Technical Information | Full technical walkthrough outlining elements parsing rules and configuration info. |
+| `/login` | Authentication page | Login portal structure for user verification systems. |
 
 ---
 
@@ -391,102 +467,87 @@ Docify AI exposes a multi-page web interface served by FastAPI with Jinja2 templ
 
 ### POST /convert
 
-Converts an uploaded image or PDF into a Word or PDF document.
+Submits a document file to be parsed and downloads the formatted output.
 
-**Content-Type**: `multipart/form-data`
+- **Content-Type**: `multipart/form-data`
 
-**Request Parameters:**
+#### Request Parameters
 
-| Field | Type | Required | Default | Description |
+| Parameter | Data Type | Required | Default Value | Functional Role |
 | :--- | :--- | :---: | :--- | :--- |
-| `file` | File | Yes | — | Source image (`PNG`, `JPG`, `JPEG`, `WEBP`) or multi-page `PDF`. |
-| `mode` | String | No | `preserve` | `preserve` keeps original line breaks; `flow` joins lines into continuous paragraphs. |
-| `outtype` | String | No | `docx` | Output file format: `docx` or `pdf`. |
-| `auto_format` | String | No | `true` | `true` uses Gemini-detected layout; `false` uses manual override parameters below. |
-| `font_family` | String | No | `Calibri` | Manual override font family (e.g., `Arial`, `Times New Roman`, `Georgia`). |
-| `font_size` | Float | No | `12` | Manual override font size in points. |
-| `line_spacing` | Float | No | `1.15` | Manual override line spacing multiplier (`1.0`, `1.15`, `1.5`, `2.0`). |
-| `page_margin` | Float | No | `2.54` | Manual override page margin in centimeters (clamped between `1.0` and `5.0`). |
-| `alignment` | String | No | `left` | Manual override text alignment: `left`, `center`, `right`, `justify`. |
+| `file` | Binary | Yes | - | Source file upload (`PNG`, `JPG`, `JPEG`, `WEBP`, or `PDF`). |
+| `outtype` | String | No | `docx` | Target export format: `docx` or `pdf`. |
+| `mode` | String | No | `preserve` | Text structure layout: `preserve` respects original lines; `flow` combines paragraphs. |
+| `auto_format` | String | No | `true` | When `true`, uses AI layout extraction. When `false`, uses the manual overrides below. |
+| `font_family` | String | No | `Calibri` | Manual override font family (e.g. `Arial`, `Times New Roman`, `Georgia`). |
+| `font_size` | Float | No | `12.0` | Manual override font size in points. |
+| `line_spacing` | Float | No | `1.15` | Manual override line spacing multiplier: `1.0`, `1.15`, `1.5`, `2.0`. |
+| `para_spacing` | Float | No | `8.0` | Manual override space after paragraphs in points. |
+| `first_line_indent` | Float | No | `0.0` | Manual override first line indent in centimeters. |
+| `page_margin` | Float | No | `2.54` | Manual override page margin in centimeters. |
+| `text_align` | String | No | `left` | Manual override text alignment: `left`, `center`, `right`, `justify`. |
+| `text_bold` | String | No | `false` | Manual override: forces all text to bold (`true`/`false`). |
+| `text_italic` | String | No | `false` | Manual override: forces all text to italic (`true`/`false`). |
+| `text_underline` | String | No | `false` | Manual override: forces all text to underline (`true`/`false`). |
 
-**Response:**
+#### Example Client Submissions
 
-On success, the server returns the generated file as a binary download with the appropriate `Content-Disposition` header (`attachment; filename="output.docx"` or `"output.pdf"`).
-
-On failure, a JSON error response is returned:
-
-```json
-{
-  "error": "Descriptive error message here"
-}
-```
-
-**Example using curl:**
-
+##### cURL command:
 ```bash
 curl -X POST http://localhost:8000/convert \
-  -F "file=@handwritten_notes.jpg" \
+  -F "file=@handwritten_sheet.jpg" \
   -F "outtype=docx" \
   -F "auto_format=true" \
-  --output result.docx
+  --output document_result.docx
 ```
 
-### GET /history
+##### Python script:
+```python
+import requests
 
-Returns the conversion history page (HTML). History is tracked client-side using browser `localStorage` in `static/js/history.js`.
+url = "http://localhost:8000/convert"
+files = {"file": open("handwritten_sheet.jpg", "rb")}
+data = {
+    "outtype": "pdf",
+    "auto_format": "true",
+    "mode": "preserve"
+}
+
+response = requests.post(url, files=files, data=data)
+
+if response.status_code == 200:
+    with open("document_result.pdf", "wb") as f:
+        f.write(response.content)
+    print("Document compiled successfully.")
+else:
+    print(f"Error: {response.json()}")
+```
 
 ---
 
 ## Configuration Reference
 
-All runtime configuration is loaded from the `.env` file using `python-dotenv`.
+Docify AI loads its primary runtime values from the system environment or your local `.env` file:
 
-| Variable | Required | Description |
+| Environment Variable | Required | Description |
 | :--- | :---: | :--- |
-| `GEMINI_API_KEY` | Yes | Your Google Gemini API key from Google AI Studio. |
+| `GEMINI_API_KEY` | Yes | Comma-separated list of Google Gemini API keys. |
+| `GROQ_API_KEY` | No | API Key for backup Llama vision models from Groq. |
+| `OPENROUTER_API_KEY` | No | API Key for backup free vision models from OpenRouter. |
 
-**Internal constants (editable in `main.py`):**
+### Internal System Constants
+These variables can be adjusted directly in `main.py` if needed:
 
-| Constant | Default | Description |
+| Constant | Default Value | Description |
 | :--- | :--- | :--- |
-| `_PRIMARY_MODEL` | `gemini-2.5-flash` | Primary Gemini model for all inference calls. |
-| `_FALLBACK_MODEL` | `gemini-2.0-flash` | Fallback model on sustained 503 overload. |
-| `UPLOAD_DIR` | `uploads/` | Temporary directory for incoming files and drawing crops. |
-| `OUTPUT_DIR` | `outputs/` | Directory for completed output documents. |
-| HTTP timeout | `120,000 ms` | Maximum time allowed per Gemini API call. |
-
----
-
-## Development Notes
-
-**Modifying the OCR prompt:**
-
-The `COMBINED_OCR_PROMPT` string in `main.py` (lines 170–201) controls all transcription and layout analysis behavior. Changes here directly affect how Gemini interprets formatting, tables, and drawings.
-
-**Extending the element schema:**
-
-Add new fields to `DocElement` in `main.py` (lines 33–97) and update the prompt to instruct Gemini to populate those fields. Pydantic will validate all model output against the updated schema automatically.
-
-**Adding new output formats:**
-
-The document assembly is self-contained per format. DOCX is built in the `if outtype == "docx"` block using `python-docx`. PDF is built in the `elif outtype == "pdf"` block using ReportLab's canvas API. A new format (e.g., Markdown, HTML) can be added as an additional `elif` block.
-
-**OCR post-processing:**
-
-The `_OCR_FIXES` list (lines 310–321) contains compiled regex patterns that correct recurring Gemini OCR misreads, such as zero/O confusion in numeric contexts and markdown backtick leakage. Additional fixes can be appended to this list.
-
----
-
-## Known Limitations
-
-- **Handwriting recognition accuracy**: Accuracy is bounded by the quality and resolution of the input image. Very faint, smudged, or extremely small handwriting may result in partial transcription or `[?]` placeholders.
-- **Complex multi-column layouts**: Documents with two or more side-by-side text columns may not be correctly serialized into a single reading order.
-- **Very large PDFs**: Multi-page PDFs make one Gemini API call per page. Very large documents will produce proportional API costs and processing time.
-- **PDF font embedding**: The PDF output uses ReportLab's built-in Helvetica font family. Custom fonts require additional ReportLab font registration.
-- **Poppler dependency**: The PDF input pipeline depends on the Poppler utility being installed and available on the system PATH. Without it, PDF files cannot be processed.
+| `_PRIMARY_MODEL` | `gemini-2.5-flash` | The primary vision model for processing OCR structured layout JSON. |
+| `_FALLBACK_MODEL` | `gemini-2.0-flash` | Backup Gemini model tried when the primary returns a 503 error. |
+| `UPLOAD_DIR` | `"uploads"` | Folder used to store uploaded files and cropped drawing assets. |
+| `OUTPUT_DIR` | `"outputs"` | Folder where generated Word and PDF files are saved. |
+| `TIMEOUT` | `120,000 ms` | Maximum time allowed per vision API call before timeout. |
 
 ---
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for the full license text.
+This project is licensed under the terms of the MIT License. See the [LICENSE](LICENSE) file for complete details.

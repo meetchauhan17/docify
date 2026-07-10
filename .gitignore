@@ -28,3 +28,12 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Test and helper scripts
+convert_pdf_to_image.py
+inspect_table_logic.py
+read_pdf_text.py
+test_conversion.py
+test_docx_generation.py
+test_read_docx.py
+
