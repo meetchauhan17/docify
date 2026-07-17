@@ -140,17 +140,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(err.detail || `Server error ${response.status}`);
             }
 
-            let filename = 'output.' + formData.get('outtype');
-            const cd = response.headers.get('Content-Disposition');
-            if (cd && cd.includes('filename=')) filename = cd.split('filename=')[1].replace(/['"]/g, '');
+            // Derive a friendly filename from the uploaded file, fallback to output
+            const originalName = (fileInput.files && fileInput.files[0]) ? fileInput.files[0].name : 'output';
+            const dotIdx = originalName.lastIndexOf('.');
+            const baseName = dotIdx !== -1 ? originalName.substring(0, dotIdx) : originalName;
+            const ext = formData.get('outtype') || 'pdf';
+            const filename = `${baseName}.${ext}`;
 
             const blob = await response.blob();
             const url  = URL.createObjectURL(blob);
-            const a    = Object.assign(document.createElement('a'), { href: url, download: filename, style: 'display:none' });
+            const a    = document.createElement('a');
+            a.href = url;
+            a.setAttribute('download', filename);
+            a.style.display = 'none';
             document.body.appendChild(a);
             a.click();
-            URL.revokeObjectURL(url);
-            document.body.removeChild(a);
+            
+            // Delay revoking the Object URL to allow browser to start the download with the filename intact
+            setTimeout(() => {
+                URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            }, 250);
 
             // Save to history
             try {

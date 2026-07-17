@@ -121,7 +121,7 @@ class DocElement(BaseModel):
     )
     text: Optional[str] = Field(
         None,
-        description="The transcribed text content of the line or paragraph."
+        description="The transcribed text content of the line or paragraph. For multi-line content within a single element, use \\n to separate lines."
     )
     tag: Optional[str] = Field(
         None,
@@ -143,21 +143,31 @@ class DocElement(BaseModel):
         None,
         description="Text alignment: 'left', 'center', 'right', 'justify'."
     )
+    font_size_pt: Optional[float] = Field(
+        None,
+        description="Estimated font size in points (pt). Use 16 for main headings, 13 for sub-headings, 11-12 for body text, 10 for captions/footnotes. Only set when the size visually differs from normal body text."
+    )
     left_indent_cm: Optional[float] = Field(
         None,
         description="Estimated left indentation of the text element in centimeters (usually 0.0, or 0.5 for bullet points/indented blocks)."
     )
     table_data: Optional[List[List[str]]] = Field(
         None,
-        description="A list of rows, where each row is a list of strings representing the cells of the table."
+        description="A list of rows, where each row is a list of strings representing the cells of the table. Each cell string must contain the FULL text of that cell. Use \\n within a cell string for multi-line cell content."
     )
     borderless: Optional[bool] = Field(
         None,
         description="True if the table is a layout grid (e.g. side-by-side signature blocks, multi-column key-value pairs) and should be rendered without visible borders."
     )
+    col_alignments: Optional[List[str]] = Field(
+        None,
+        description="Per-column text alignment for table columns. Each entry should be 'left', 'center', or 'right'. Length must match the number of columns in table_data."
+    )
     bbox: Optional[List[float]] = Field(
         None,
-        description="Normalized bounding box [x1, y1, x2, y2] (from 0.0 to 1.0) of the drawing or diagram in the image."
+        description="Normalized bounding box [x1, y1, x2, y2] (from 0.0 to 1.0) of the drawing or diagram in the image. "
+                    "The box MUST be drawn TIGHTLY around the visible ink/marks only — do NOT pad it with surrounding whitespace. "
+                    "x1,y1 is top-left corner; x2,y2 is bottom-right corner of the drawn marks."
     )
     description: Optional[str] = Field(
         None,
@@ -256,42 +266,87 @@ def pdf_to_images(path):
 #  COMBINED OCR PROMPT — Consolidated OCR & Layout structured detection
 # ═══════════════════════════════════════════════════════════════════════
 COMBINED_OCR_PROMPT = """\
-You are an expert document analyzer and handwriting OCR engine. Your task is to perform high-fidelity text transcription and document layout analysis on the provided image, returning the results in a structured format.
+You are a world-class document OCR engine and layout analyst. Your task is to extract every piece of text and structural information from the provided document image with PERFECT accuracy, preserving all content exactly as it appears.
 
-Analyse the document from TOP to BOTTOM, LEFT to RIGHT. Generate a list of elements in their exact reading order.
+Analyse the document strictly from TOP to BOTTOM, LEFT to RIGHT. Return elements in their exact visual reading order.
 
-━━━ TRANSCRIPTION RULES ━━━
-1. Transcribe text with 100% fidelity. Do not correct spelling, grammar, or abbreviations.
-2. If a word is completely illegible, transcribe it as [?].
-3. Preserve math symbols, subscripts (x² -> x^2), fractions (3/4), and equations.
-4. For text elements, determine the tag:
-   - HEADING: Major title (significantly larger/bolder)
-   - SUBHEAD: Sub-heading or section label (bold, slightly larger)
-   - BODY: Normal paragraph or text line
-   - BULLET: List item or bullet point
-   - CENTER: Centered text (e.g. date, page title)
-   - UNDERLN: Text that has an underline drawn directly under it.
-5. For text elements, detect bold, italic, and underline formatting, and text alignment ('left', 'center', 'right', 'justify').
-6. Estimate the left indentation of text in centimeters (e.g., 0.5 cm for bullet points or indented paragraphs).
+━━━ GENERAL TRANSCRIPTION RULES ━━━
+1. COPY TEXT EXACTLY — do not paraphrase, summarize, correct, auto-complete, or rephrase anything. Every word, number, symbol, and abbreviation must be transcribed exactly as printed/written.
+2. Preserve ALL capitalisation, punctuation, and spacing exactly as in the original.
+3. If a word or character is completely illegible (cannot be determined at all), write [?].
+4. NEVER invent, guess, or interpolate text that is not clearly visible in the image.
+5. Preserve the EXACT spelling — even if it appears to be a typo or abbreviation.
 
-━━━ NATIVE TABLES ━━━
-Identify any tables in the image. For each table, return it as a 'table' element with `table_data` representing a 2D grid of cell texts. Extract all cell text accurately.
-If the table has no visible gridlines, set `borderless` to True.
+━━━ MATHEMATICAL EQUATIONS & FORMULAS ━━━
+This is CRITICAL. Mathematical content must be transcribed with perfect fidelity:
+1. Transcribe all math symbols exactly: +, -, ×, ÷, ±, ≠, ≤, ≥, ∞, ∝, ∂, ∇, ∑, ∏, ∫, √, ∛
+2. Greek letters: α, β, γ, δ, ε, ζ, η, θ, λ, μ, ν, π, ρ, σ, τ, φ, ψ, ω (capital: Δ, Σ, Π, Φ, Ω)
+3. Superscripts: write as x^2, x^n, e^(x+1), A^T, etc.
+4. Subscripts: write as x_1, a_n, C_p, log_2(n), etc.
+5. Fractions: write as (numerator)/(denominator), e.g., (3x+1)/(x^2-1) or use the ÷ symbol if a simple fraction.
+6. Square roots: write as √(expression), e.g., √(x^2+y^2).
+7. Vectors: write with arrow notation →v or bold: **v**.
+8. Absolute value: |x|, norm: ||v||.
+9. Matrix notation: write row by row separated by semicolons inside square brackets: [a b; c d].
+10. For multi-line equations that continue on the next line (starting with = or operator), emit each line as a SEPARATE text element with tag='BODY'.
+11. NEVER render math as images — always transcribe as Unicode text.
 
-━━━ SIGNATURE BLOCKS & SIDE-BY-SIDE TEXT ━━━
-If the document has side-by-side text columns, side-by-side metadata keys, or side-by-side signature blocks (for example, 'Prepared By' on the left and 'Approved By' on the right, with names/titles/drawings/images underneath them), you MUST group them into a single 'table' element with `borderless` set to True.
-Each column of the table should correspond to one side-by-side block. This is critical to ensure they are rendered next to each other rather than stacked vertically. If there are inline signature drawings, include them in the respective cells.
+━━━ TEXT ELEMENT TAGS ━━━
+For each text element, assign the correct tag:
+- HEADING: Major title or primary heading (significantly larger/bolder font than body)
+- SUBHEAD: Sub-heading or section label (bold, slightly larger than body, or underlined heading)
+- BODY: Normal body text, sentences, paragraphs, equations, formulas, running text
+- BULLET: List item, bullet point, numbered item (e.g., starts with •, -, 1., a), etc.)
+- CENTER: Text that is visually centred on the page (dates, titles, captions)
+- UNDERLN: Body text that has a visible underline drawn directly beneath it
+
+━━━ FORMATTING FIELDS ━━━
+For every text element, set these fields:
+- bold: true if text is printed bold or written significantly thicker
+- italic: true if text is slanted/italic
+- underline: true if text has an underline
+- alignment: 'left' | 'center' | 'right' | 'justify'
+- font_size_pt: estimated font size (16 for main heading, 13 for sub-heading, 12 for body, 10 for footnote/caption)
+- left_indent_cm: estimated left indent in cm (0.0 for normal text, 0.5 for bullet/indented)
+
+━━━ MULTI-COLUMN DOCUMENT HEADERS ━━━
+If the page header has MULTIPLE content blocks side-by-side (e.g., logo on left, title in centre, date/page info on right), represent this as ONE 'table' element with borderless=true.
+- Each side-by-side block = one column.
+- Do NOT emit header items as separate stacked text elements.
+- If a logo or stamp appears in a header cell, leave that cell text empty and emit a separate 'drawing' element for it.
+
+━━━ TABLES ━━━
+Table extraction must be PERFECT:
+1. Identify ALL tables — with or without visible gridlines.
+2. Extract EVERY cell's text with 100% accuracy. Do not skip, merge, or omit any cell.
+3. If a table has NO visible gridlines, set borderless=true.
+4. Multi-line cell text: if a cell contains text on multiple visual lines, join them with \n (e.g., "Subject Code:\n3160003").
+5. Header rows: the first row is typically the header. Preserve header text exactly.
+6. Empty cells: represent as empty string "".
+7. Set col_alignments to the per-column alignment list (e.g., ["center","left","center"]).
+8. Mathematical content in table cells: transcribe with the same math rules as above.
+
+━━━ TIMETABLE / SCHEDULE TABLES (special rules) ━━━
+For schedule or timetable tables:
+- If a DATE cell (e.g., "16/06/2026") and a DAY-OF-WEEK cell (e.g., "TUESDAY") are on separate visual lines but logically belong to the same cell (spanning multiple rows), combine them into ONE cell value: "16/06/2026\nTUESDAY". Do NOT create two separate rows.
+- Subject code and subject name printed on separate lines within the same cell should be combined with \n: e.g., "IPDC\n(3160003)".
+- Time ranges, batch info, and lab/room info that appear in the same cell should all be included, using \n to separate visual lines.
+
+━━━ SIGNATURE BLOCKS & SIDE-BY-SIDE COLUMNS ━━━
+If the document has side-by-side text columns, key-value pairs, or signature blocks, represent them as ONE 'table' element with borderless=true. Each column = one table column. Signature/stamp drawings inside a signature block MUST be placed as a 'drawing' element within the table rows — NOT as standalone elements after the table. Leave the cell with the signature image empty; it will be matched automatically.
 
 ━━━ DRAWINGS, DIAGRAMS & SHAPES ━━━
-Identify all drawings (diagrams, flowcharts, graphs, arrows, brackets, sketches).
-For each drawing, return a 'drawing' element with a normalized bounding box [x1, y1, x2, y2] where x1,y1 is top-left and x2,y2 is bottom-right as fractions of image width and height (values from 0.0 to 1.0).
-- Simple Arrow: If the drawing is only a simple arrow (e.g. pointing from one item to another), set is_simple_arrow=True and specify arrow_direction ('right', 'left', 'up', 'down', 'up-right', 'up-left', 'down-right', 'down-left').
-- Simple Bracket: If the drawing is only a grouping bracket or brace (curly '{', square '[', or plain L-shaped), set is_simple_bracket=True, specify bracket_style ('curly', 'square', 'plain') and bracket_side ('left' or 'right' of the text).
-- General Drawings: For charts, flowcharts, or sketches, set is_simple_arrow and is_simple_bracket to False and provide a brief description.
+For each drawing (diagram, flowchart, graph, chart, sketch, logo, stamp, signature):
+1. Emit a 'drawing' element with a TIGHT normalized bbox [x1, y1, x2, y2] (values 0.0–1.0).
+2. The bbox must be measured precisely to where the ink starts and ends. Do NOT include surrounding whitespace.
+3. Do NOT use round numbers — use the actual measured fractional coordinates.
+4. Simple Arrow: set is_simple_arrow=true and specify arrow_direction.
+5. Simple Bracket: set is_simple_bracket=true and specify bracket_style and bracket_side.
 
 ━━━ PAGE SETTINGS ━━━
-Estimate the overall page margins in cm (page_margin_cm) and the line spacing (line_spacing: 1.0 for tight, 1.15 for normal, 1.5 for airy, 2.0 for double-spaced).
+Estimate page_margin_cm (typically 1.5–3.0 cm) and line_spacing (1.0=tight, 1.15=normal, 1.5=airy, 2.0=double).
 """
+
 
 PLAIN_OCR_PROMPT = (
     "Extract all the text from this handwriting image exactly as written. "
@@ -970,7 +1025,7 @@ def run_ocr_auto(image_path):
             config = genai_types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=DocumentLayout,
-                temperature=0.1,
+                temperature=0.0,  # Maximum determinism for OCR accuracy
             )
 
         resp_text = _call_vision_api(img, COMBINED_OCR_PROMPT, config=config)
@@ -987,7 +1042,8 @@ def run_ocr_auto(image_path):
                 elements.append({
                     "type": "table",
                     "data": el.table_data or [],
-                    "borderless": getattr(el, "borderless", False) or False
+                    "borderless": getattr(el, "borderless", False) or False,
+                    "col_alignments": getattr(el, "col_alignments", None) or [],
                 })
             elif etype == "drawing":
                 if el.is_simple_arrow:
@@ -1032,6 +1088,9 @@ def run_ocr_auto(image_path):
                 underline = el.underline if el.underline is not None else underline_mapped
                 align = el.alignment if el.alignment is not None else align
                 left_i = el.left_indent_cm if el.left_indent_cm is not None else left_i
+                # Use model-reported font size if available and plausible
+                if el.font_size_pt is not None and 6.0 <= el.font_size_pt <= 36.0:
+                    fsize = float(el.font_size_pt)
                 
                 elements.append({
                     "type":                 "text",
@@ -1097,11 +1156,11 @@ def run_ocr_manual(image_path):
 # ─────────────────────────────────────────────────
 #  Drawing crop helper
 # ─────────────────────────────────────────────────
-def _crop_drawing(image_path, bbox, padding=0.0, pad_px=0,
+def _crop_drawing(image_path, bbox, padding=0.05, pad_px=0,
                   pad_top=None, pad_bottom=None, pad_left=None, pad_right=None):
     """
     Crop the drawing region from image_path using normalised bbox [x1,y1,x2,y2].
-    padding: relative fraction to expand each side.
+    padding: relative fraction to expand each side (default 5% so drawing edges are never clipped).
     pad_px: absolute pixel padding on all sides (overridden per-side by pad_top/bottom/left/right).
     pad_top/bottom/left/right: per-side absolute pixel padding overrides.
     Returns the path to a cropped temp PNG, or None on any failure.
@@ -1176,55 +1235,91 @@ def _set_margins(doc, margin_cm):
         section.right_margin  = Cm(margin_cm)
 
 
+def _set_row_height(row, height_cm):
+    """Set a minimum row height on a Word table row using XML trHeight."""
+    tr = row._tr
+    trPr = tr.find(qn('w:trPr'))
+    if trPr is None:
+        trPr = OxmlElement('w:trPr')
+        tr.insert(0, trPr)
+    trHeight = OxmlElement('w:trHeight')
+    # height in twentieths of a point (1 cm = 567 twips)
+    twips = int(height_cm * 567)
+    trHeight.set(qn('w:val'), str(twips))
+    trHeight.set(qn('w:hRule'), 'atLeast')  # minimum height, allows expansion
+    trPr.append(trHeight)
+
+
+def _set_cell_margins(cell, top_pt=6, bottom_pt=6, left_pt=4, right_pt=4):
+    """Set cell padding (top/bottom/left/right) in points on a Word table cell."""
+    tc = cell._tc
+    tcPr = tc.find(qn('w:tcPr'))
+    if tcPr is None:
+        tcPr = OxmlElement('w:tcPr')
+        tc.insert(0, tcPr)
+    tcMar = OxmlElement('w:tcMar')
+    # 1 pt = 20 twips
+    for side, val_pt in [('top', top_pt), ('bottom', bottom_pt), ('left', left_pt), ('right', right_pt)]:
+        node = OxmlElement(f'w:{side}')
+        node.set(qn('w:w'), str(int(val_pt * 20)))
+        node.set(qn('w:type'), 'dxa')
+        tcMar.append(node)
+    # Remove existing tcMar if any
+    existing = tcPr.find(qn('w:tcMar'))
+    if existing is not None:
+        tcPr.remove(existing)
+    tcPr.append(tcMar)
+
 def _add_inline_picture_docx(doc, img_path, bbox, page_margin_cm=2.54):
     """
     Add a drawing INLINE in the text flow (not floating).
-    Width is capped to the usable content width. Aspect ratio is preserved.
-    This approach guarantees zero text-image overlap.
+    Size is derived from the actual cropped pixel dimensions (not raw bbox fractions),
+    so large/small bboxes don't distort the drawing size.
+    Width defaults to 60% of the content area, capped at 100%.
+    Aspect ratio is always preserved.
     """
     cropped = _crop_drawing(img_path, bbox)
     if not cropped:
         return
 
     try:
-        # Calculate maximum allowed width (content area width)
         content_w_cm = 21.0 - 2.0 * page_margin_cm
         max_w_cm = max(2.0, content_w_cm)
 
-        # Get natural bbox dimensions as a fraction of content width
-        x1n, y1n, x2n, y2n = [float(v) for v in bbox]
-        bbox_w_frac = x2n - x1n   # fraction of full width
-        bbox_h_frac = y2n - y1n
-
-        # Map to cm, cap at content width
-        img_w_cm = min(max_w_cm, bbox_w_frac * (21.0 - 2.0 * page_margin_cm))
-        img_w_cm = max(1.0, img_w_cm)
-
-        # Calculate height from aspect ratio
+        # Use actual pixel dimensions to derive aspect ratio — never trust raw bbox size
         with Image.open(cropped) as ci:
             nat_w, nat_h = ci.size
-        aspect = nat_h / nat_w if nat_w > 0 else 0.5
+        aspect = nat_h / nat_w if nat_w > 0 else 1.0
+
+        # Size derived from relative bbox width fraction of content area
+        x1n, y1n, x2n, y2n = [float(v) for v in bbox]
+        bbox_w_frac = x2n - x1n
+        img_w_cm = content_w_cm * bbox_w_frac
+        img_w_cm = max(1.5, min(max_w_cm, img_w_cm))
         img_h_cm = img_w_cm * aspect
 
-        # Clamp height so very tall drawings don't overflow page
+        # Clamp height so very tall drawings don't overflow the page
         max_h_cm = 29.7 - 2.0 * page_margin_cm
-        if img_h_cm > max_h_cm * 0.7:
-            img_h_cm = max_h_cm * 0.7
+        if img_h_cm > max_h_cm * 0.65:
+            img_h_cm = max_h_cm * 0.65
             img_w_cm = img_h_cm / aspect if aspect > 0 else img_w_cm
 
-        para = doc.add_paragraph()
-        para.paragraph_format.space_before = Pt(6)
-        para.paragraph_format.space_after  = Pt(6)
+        # Horizontal alignment: mirror the original horizontal position in the source
         cx_norm = (x1n + x2n) / 2.0
         if cx_norm < 0.35:
-            para.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            align = WD_ALIGN_PARAGRAPH.LEFT
         elif cx_norm > 0.65:
-            para.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            align = WD_ALIGN_PARAGRAPH.RIGHT
         else:
-            para.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            align = WD_ALIGN_PARAGRAPH.CENTER
+
+        para = doc.add_paragraph()
+        para.paragraph_format.space_before = Pt(8)
+        para.paragraph_format.space_after  = Pt(8)
+        para.paragraph_format.alignment    = align
         run = para.add_run()
         run.add_picture(cropped, width=Cm(img_w_cm), height=Cm(img_h_cm))
-        print(f"  [DOCX] Drawing inline: {img_w_cm:.2f}×{img_h_cm:.2f}cm")
+        print(f"  [DOCX] Drawing inline: {img_w_cm:.2f}×{img_h_cm:.2f}cm (aspect={aspect:.2f})")
     except Exception as e:
         print(f"  [DOCX] Inline image failed: {e}")
 
@@ -1234,11 +1329,60 @@ def _add_inline_picture_docx(doc, img_path, bbox, page_margin_cm=2.54):
 # ─────────────────────────────────────────────────
 PT_PER_CM = 28.3465
 
+# ── Register Unicode TTF fonts for PDF (so math/Greek/special chars render) ──
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+_PDF_FONT_NORMAL = "Helvetica"       # fallback
+_PDF_FONT_BOLD   = "Helvetica-Bold"
+_PDF_FONT_ITALIC = "Helvetica-Oblique"
+_PDF_FONT_BOLDITALIC = "Helvetica-BoldOblique"
+
+def _register_pdf_fonts():
+    """Try to register Calibri (same as DOCX) or Arial as Unicode TTF fonts."""
+    global _PDF_FONT_NORMAL, _PDF_FONT_BOLD, _PDF_FONT_ITALIC, _PDF_FONT_BOLDITALIC
+    import os
+    font_dir = r"C:\Windows\Fonts"
+    candidates = [
+        # (normal, bold, italic, bolditalic, name_prefix)
+        ("calibri.ttf", "calibrib.ttf", "calibrii.ttf", "calibriz.ttf", "Calibri"),
+        ("arial.ttf",   "arialbd.ttf",  "ariali.ttf",   "arialbi.ttf",  "Arial"),
+    ]
+    for norm, bold, ital, boldital, prefix in candidates:
+        np = os.path.join(font_dir, norm)
+        bp = os.path.join(font_dir, bold)
+        ip = os.path.join(font_dir, ital)
+        bip = os.path.join(font_dir, boldital)
+        if os.path.exists(np):
+            try:
+                pdfmetrics.registerFont(TTFont(f"{prefix}",         np))
+                pdfmetrics.registerFont(TTFont(f"{prefix}-Bold",    bp  if os.path.exists(bp)  else np))
+                pdfmetrics.registerFont(TTFont(f"{prefix}-Italic",  ip  if os.path.exists(ip)  else np))
+                pdfmetrics.registerFont(TTFont(f"{prefix}-BoldItalic", bip if os.path.exists(bip) else (bp if os.path.exists(bp) else np)))
+                from reportlab.pdfbase.pdfmetrics import registerFontFamily
+                registerFontFamily(prefix,
+                    normal=prefix,
+                    bold=f"{prefix}-Bold",
+                    italic=f"{prefix}-Italic",
+                    boldItalic=f"{prefix}-BoldItalic")
+                _PDF_FONT_NORMAL     = prefix
+                _PDF_FONT_BOLD       = f"{prefix}-Bold"
+                _PDF_FONT_ITALIC     = f"{prefix}-Italic"
+                _PDF_FONT_BOLDITALIC = f"{prefix}-BoldItalic"
+                print(f"  [PDF-FONT] Registered {prefix} as Unicode PDF font")
+                return
+            except Exception as e:
+                print(f"  [PDF-FONT] Failed to register {prefix}: {e}")
+    print("  [PDF-FONT] Using Helvetica fallback (limited Unicode)")
+
+_register_pdf_fonts()
+
+
 def _rl_font(bold, italic):
-    if bold and italic: return "Helvetica-BoldOblique"
-    if bold:            return "Helvetica-Bold"
-    if italic:          return "Helvetica-Oblique"
-    return "Helvetica"
+    if bold and italic: return _PDF_FONT_BOLDITALIC
+    if bold:            return _PDF_FONT_BOLD
+    if italic:          return _PDF_FONT_ITALIC
+    return _PDF_FONT_NORMAL
 
 
 def _pdf_draw_text(c, txt, x, y, font_name, font_size, underline=False):
@@ -1268,13 +1412,22 @@ def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=Fal
     table_data = [list(r) for r in table_data]
     
     # Pre-process DATE column (index 0) to combine date and day of week
+    # Handles both old split-row format AND new \n-separator format from Gemini.
     DAYS_OF_WEEK = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
     for r_idx in range(1, rows):
-        val_curr = table_data[r_idx][0].strip() if len(table_data[r_idx]) > 0 else ""
+        if len(table_data[r_idx]) == 0:
+            continue
+        val_curr = table_data[r_idx][0].strip()
+        # Case 1: Gemini already combined with \n — normalize the separator
+        if '\n' in val_curr:
+            # Already combined; replace \n with space for clean display
+            table_data[r_idx][0] = val_curr.replace('\n', ' ')
+            continue
+        # Case 2: Old format — day-of-week is on its own row
         if val_curr.lower() in DAYS_OF_WEEK:
             # Find the first non-empty cell above it in DATE column
             prev_r = r_idx - 1
-            while prev_r >= 0 and table_data[prev_r][0].strip() == "":
+            while prev_r >= 0 and (len(table_data[prev_r]) == 0 or table_data[prev_r][0].strip() == ""):
                 prev_r -= 1
             if prev_r >= 0:
                 val_prev = table_data[prev_r][0].strip()
@@ -1364,11 +1517,14 @@ def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=Fal
             spans[start_r][col_idx] = (span, 1)
             parent_text = ref_table[parent][col_idx] if col_idx < len(ref_table[parent]) else ""
             
-            table_data[start_r][col_idx] = parent_text
+            # Guard: row may be shorter than col_idx in a jagged OCR table
+            if col_idx < len(table_data[start_r]):
+                table_data[start_r][col_idx] = parent_text
             for rx in row_list:
                 if rx != start_r:
                     covered[rx][col_idx] = True
-                    table_data[rx][col_idx] = ""
+                    if col_idx < len(table_data[rx]):
+                        table_data[rx][col_idx] = ""
 
     # 1b. Detect horizontal cell spans (colspans) on top of vertical spans
     for r_idx in range(rows):
@@ -1379,15 +1535,19 @@ def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=Fal
                 next_c = col_idx + 1
                 while next_c < cols:
                     # Merge next_c if it is empty, not covered, not matched to a drawing, and has same r_span
-                    if (not covered[r_idx][next_c] and 
-                        (table_data[r_idx][next_c].strip() == "") and 
+                    # Guard: row may be shorter than next_c in a jagged OCR table
+                    next_c_val = table_data[r_idx][next_c] if next_c < len(table_data[r_idx]) else None
+                    if (next_c_val is not None and
+                        not covered[r_idx][next_c] and 
+                        (next_c_val.strip() == "") and 
                         (r_idx, next_c) not in cell_drawings and
                         spans[r_idx][next_c][0] == r_span):
                         
                         # Merge next_c into col_idx for all rows in the vertical span
                         for rx in range(r_idx, r_idx + r_span):
                             covered[rx][next_c] = True
-                            table_data[rx][next_c] = ""
+                            if next_c < len(table_data[rx]):
+                                table_data[rx][next_c] = ""
                         
                         c_span += 1
                         spans[r_idx][col_idx] = (r_span, c_span)
@@ -1399,11 +1559,11 @@ def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=Fal
                 col_idx += 1
 
     # 2. Width & Padding configs
-    pad_x = 3.0 if rows > 5 else 4.0
-    pad_y = 2.0 if rows > 5 else 4.0
-    fsize = 9
-    font_name = "Helvetica"
-    font_bold = "Helvetica-Bold"
+    pad_x = 4.0 if rows > 5 else 5.0
+    pad_y = 8.0 if rows > 5 else 10.0   # generous top/bottom padding like notebook rows
+    fsize = 9.5 if rows > 5 else 11.0   # match DOCX cell font sizes
+    font_name = _PDF_FONT_NORMAL
+    font_bold = _PDF_FONT_BOLD
     
     # Calculate initial column widths, distributing spanned widths
     col_widths = [0.0] * cols
@@ -1437,23 +1597,27 @@ def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=Fal
         
     x_start = margin_pts
 
-    # Helper to wrap text into lines
+    # Helper to wrap text into lines, splitting by newline first
     def wrap_text(text, width, font, size):
         if not text:
             return []
-        words = text.split(" ")
+        
+        # Split by explicit newlines first, then wrap each line segment
         lines = []
-        cur_line = ""
-        for word in words:
-            test = (cur_line + " " + word).strip()
-            if c.stringWidth(test, font, size) <= width - pad_x * 2:
-                cur_line = test
-            else:
-                if cur_line:
-                    lines.append(cur_line)
-                cur_line = word
-        if cur_line:
-            lines.append(cur_line)
+        raw_lines = str(text).split("\n")
+        for raw_line in raw_lines:
+            words = raw_line.split(" ")
+            cur_line = ""
+            for word in words:
+                test = (cur_line + " " + word).strip()
+                if c.stringWidth(test, font, size) <= width - pad_x * 2:
+                    cur_line = test
+                else:
+                    if cur_line:
+                        lines.append(cur_line)
+                    cur_line = word
+            if cur_line:
+                lines.append(cur_line)
         return lines
 
     # Pre-calculate wrapped lines for all active cells using spanned widths
@@ -1473,8 +1637,9 @@ def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=Fal
         wrapped_data.append(row_wrapped)
 
     # Calculate row heights dynamically, distributing spans correctly
-    row_heights = [fsize + pad_y * 2] * rows
-    line_h = fsize * 1.05 if rows > 5 else fsize * 1.15
+    MIN_ROW_H = 28.0   # ~0.99cm minimum — matches notebook line spacing and DOCX 0.85cm rows
+    row_heights = [max(MIN_ROW_H, fsize + pad_y * 2)] * rows
+    line_h = fsize * 1.2 if rows > 5 else fsize * 1.3
     
     for r_idx in range(rows):
         for col_idx in range(cols):
@@ -1493,18 +1658,32 @@ def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=Fal
                         cw_span = sum(col_widths[col_idx : col_idx + c_span])
                         
                         if r_idx == 0:
-                            cropped = _crop_drawing(pg_path, bbox, pad_px=15, pad_bottom=2)
+                            cropped = _crop_drawing(pg_path, bbox, padding=0.0, pad_px=15, pad_bottom=2)
                         else:
-                            cropped = _crop_drawing(pg_path, bbox, pad_px=20, pad_top=-12)
+                            cropped = _crop_drawing(pg_path, bbox, padding=0.0, pad_px=20, pad_top=-12)
                         if cropped:
                             with Image.open(cropped) as ci:
                                 nat_w, nat_h = ci.size
                             aspect = nat_h / nat_w if nat_w > 0 else 0.5
-                            draw_w = cw_span - pad_x * 2
+                            
+                            # Scale signature based on bbox width if available
+                            if bbox and len(bbox) == 4:
+                                x1, y1, x2, y2 = [float(v) for v in bbox]
+                                draw_w = usable_w * (x2 - x1)
+                                draw_w = max(40.0, min(cw_span - pad_x * 2, draw_w))
+                            else:
+                                draw_w = cw_span - pad_x * 2
+                            
                             draw_h = draw_w * aspect
-                            if draw_h < 50:
-                                draw_h = 50
-                            req_h = max(req_h, draw_h + pad_y * 2)
+                            if draw_h < 40:
+                                draw_h = 40
+                            
+                            # If cell has text and drawing, sum their heights
+                            cell_txt_val = table_data[r_idx][col_idx].strip() if col_idx < len(table_data[r_idx]) else ""
+                            if cell_txt_val:
+                                req_h = (max_lines * line_h) + draw_h + pad_y * 3
+                            else:
+                                req_h = max(req_h, draw_h + pad_y * 2)
                     except Exception:
                         pass
                 
@@ -1559,9 +1738,9 @@ def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=Fal
                 if d and pg_path:
                     try:
                         if row_idx == 0:
-                            cropped = _crop_drawing(pg_path, d.get("bbox"), pad_px=15, pad_bottom=2)
+                            cropped = _crop_drawing(pg_path, d.get("bbox"), padding=0.0, pad_px=15, pad_bottom=2)
                         else:
-                            cropped = _crop_drawing(pg_path, d.get("bbox"), pad_px=20, pad_top=-12)
+                            cropped = _crop_drawing(pg_path, d.get("bbox"), padding=0.0, pad_px=20, pad_top=-12)
                         if cropped:
                             with Image.open(cropped) as ci:
                                 nat_w, nat_h = ci.size
@@ -1581,6 +1760,21 @@ def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=Fal
                             img_y = y_cell_bottom + h_cell - pad_y - draw_h
                             c.drawImage(ImageReader(cropped), img_x, img_y, width=draw_w, height=draw_h,
                                         preserveAspectRatio=True, mask='auto')
+                            
+                            # Draw text in the lower portion of the cell if present
+                            txt_val = table_data[row_idx][col_idx].strip() if col_idx < len(table_data[row_idx]) else ""
+                            if txt_val:
+                                c.setFont(font_name, fsize)
+                                tw = c.stringWidth(txt_val, font_name, fsize)
+                                text_x = curr_x + (cw_span - tw) / 2.0
+                                text_y = y_cell_bottom + pad_y
+                                c.drawString(text_x, text_y, txt_val)
+                        else:
+                            # Fallback if crop failed
+                            txt_val = table_data[row_idx][col_idx].strip() if col_idx < len(table_data[row_idx]) else ""
+                            if txt_val:
+                                c.setFont(font_name, fsize)
+                                c.drawString(curr_x + pad_x, y_cell_bottom + pad_y, txt_val)
                     except Exception as e:
                         print(f"  [PDF] Cell drawing failed: {e}")
                 else:
@@ -1596,10 +1790,16 @@ def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=Fal
                     start_offset_y = (h_cell - total_text_h) / 2.0
                     y_text = y_row_top - start_offset_y - fsize
                     
+                    # Determine column alignment from col_alignments
+                    col_aligns = (table_el.get("col_alignments") or []) if table_el else []
+                    col_align = col_aligns[col_idx] if col_idx < len(col_aligns) else "left"
+                    
                     for line in lines:
                         tw = c.stringWidth(line, f, fsize)
-                        if row_idx == 0:
+                        if row_idx == 0 or col_align == "center":
                             text_x = curr_x + (cw_span - tw) / 2.0
+                        elif col_align == "right":
+                            text_x = curr_x + cw_span - tw - pad_x
                         else:
                             text_x = curr_x + pad_x
                             
@@ -1614,6 +1814,8 @@ def _pdf_draw_table(c, table_data, y, margin_pts, page_w, page_h, borderless=Fal
 def _pdf_place_drawing_inline(c, image_path, bbox, y, page_w, margin_pts, page_h, line_spacing=1.15):
     """
     Place a drawing INLINE in the PDF text flow at the current y position.
+    Size is derived from the actual cropped pixel dimensions (not raw bbox fractions),
+    so large/small bboxes don't distort the drawing size.
     Returns the height consumed (in points) so the caller can advance y correctly.
     """
     if not bbox or len(bbox) != 4:
@@ -1627,25 +1829,25 @@ def _pdf_place_drawing_inline(c, image_path, bbox, y, page_w, margin_pts, page_h
         content_w = page_w - 2.0 * margin_pts
 
         x1n, y1n, x2n, y2n = [float(v) for v in bbox]
-        bbox_w_frac = x2n - x1n
-        bbox_h_frac = y2n - y1n
 
-        # Natural pixel dimensions → aspect ratio
+        # Use actual pixel dimensions to derive aspect ratio — never trust raw bbox size
         with Image.open(cropped) as ci:
             nat_w, nat_h = ci.size
-        aspect = nat_h / nat_w if nat_w > 0 else 0.5
+        aspect = nat_h / nat_w if nat_w > 0 else 1.0
 
-        # Scale width to fit content area
-        draw_w = min(content_w, max(50, bbox_w_frac * content_w))
+        # Size derived from relative bbox width fraction of content area
+        bbox_w_frac = x2n - x1n
+        draw_w = content_w * bbox_w_frac
+        draw_w = max(40.0, min(content_w, draw_w))
         draw_h = draw_w * aspect
 
         # Cap height at 60% of usable page height
-        max_h = (page_h - 2.0 * margin_pts) * 0.6
+        max_h = (page_h - 2.0 * margin_pts) * 0.60
         if draw_h > max_h:
             draw_h = max_h
             draw_w = draw_h / aspect if aspect > 0 else draw_w
 
-        # Align horizontally based on original horizontal position
+        # Align horizontally based on original horizontal position in source image
         cx_norm = (x1n + x2n) / 2.0
         if cx_norm < 0.35:
             x = margin_pts
@@ -1664,10 +1866,10 @@ def _pdf_place_drawing_inline(c, image_path, bbox, y, page_w, margin_pts, page_h
 
         ir = ImageReader(cropped)
         c.drawImage(ir, x, y_bottom, width=draw_w, height=draw_h,
-                    preserveAspectRatio=False, mask='auto')
+                    preserveAspectRatio=True, mask='auto')
 
-        print(f"  [PDF] Inline drawing: x={x:.1f} y_btm={y_bottom:.1f} {draw_w:.1f}×{draw_h:.1f}pts")
-        return draw_h + 12   # height consumed + bottom padding
+        print(f"  [PDF] Inline drawing: x={x:.1f} y_btm={y_bottom:.1f} {draw_w:.1f}×{draw_h:.1f}pts (aspect={aspect:.2f})")
+        return draw_h + 14   # height consumed + bottom padding
     except Exception as e:
         print(f"  [PDF] Inline drawing failed: {e}")
         return 0
@@ -1889,17 +2091,29 @@ async def convert(
                                 else:
                                     table.style = 'Table Grid'
                                 
+                                # Set minimum row height for all rows to match original spacing
+                                row_height_cm = 0.85  # approx 1 notebook line height
+                                for row in table.rows:
+                                    _set_row_height(row, row_height_cm)
+                                
                                 # Make a copy of table_data so we can safely update text
                                 table_data = [list(r) for r in table_data]
                                 
                                 # Pre-process DATE column (index 0) to combine date and day of week
+                                # Handles both old split-row format AND new \n-separator format from Gemini.
                                 DAYS_OF_WEEK = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
                                 for r_idx in range(1, rows):
-                                    val_curr = table_data[r_idx][0].strip() if len(table_data[r_idx]) > 0 else ""
+                                    if len(table_data[r_idx]) == 0:
+                                        continue
+                                    val_curr = table_data[r_idx][0].strip()
+                                    # Case 1: Gemini already combined with \n — normalize the separator
+                                    if '\n' in val_curr:
+                                        table_data[r_idx][0] = val_curr.replace('\n', ' ')
+                                        continue
+                                    # Case 2: Old format — day-of-week is on its own row
                                     if val_curr.lower() in DAYS_OF_WEEK:
-                                        # Find the first non-empty cell above it in DATE column
                                         prev_r = r_idx - 1
-                                        while prev_r >= 0 and table_data[prev_r][0].strip() == "":
+                                        while prev_r >= 0 and (len(table_data[prev_r]) == 0 or table_data[prev_r][0].strip() == ""):
                                             prev_r -= 1
                                         if prev_r >= 0:
                                             val_prev = table_data[prev_r][0].strip()
@@ -1981,11 +2195,14 @@ async def convert(
                                         spans[start_r][col_idx] = (span, 1)
                                         parent_text = ref_table[parent][col_idx] if col_idx < len(ref_table[parent]) else ""
                                         
-                                        table_data[start_r][col_idx] = parent_text
+                                        # Guard: row may be shorter than col_idx in a jagged OCR table
+                                        if col_idx < len(table_data[start_r]):
+                                            table_data[start_r][col_idx] = parent_text
                                         for rx in row_list:
                                             if rx != start_r:
                                                 covered[rx][col_idx] = True
-                                                table_data[rx][col_idx] = ""
+                                                if col_idx < len(table_data[rx]):
+                                                    table_data[rx][col_idx] = ""
 
                                 # Match drawings to cells using pre-scan assignments
                                 cell_drawings = {}
@@ -2004,15 +2221,19 @@ async def convert(
                                             next_c = col_idx + 1
                                             while next_c < cols:
                                                 # Merge next_c if it is empty, not covered, not matched to a drawing, and has same r_span
-                                                if (not covered[r_idx][next_c] and 
-                                                    (table_data[r_idx][next_c].strip() == "") and 
+                                                # Guard: row may be shorter than next_c in a jagged OCR table
+                                                next_c_val = table_data[r_idx][next_c] if next_c < len(table_data[r_idx]) else None
+                                                if (next_c_val is not None and
+                                                    not covered[r_idx][next_c] and 
+                                                    (next_c_val.strip() == "") and 
                                                     (r_idx, next_c) not in cell_drawings and
                                                     spans[r_idx][next_c][0] == r_span):
                                                     
                                                     # Merge next_c into col_idx for all rows in the vertical span
                                                     for rx in range(r_idx, r_idx + r_span):
                                                         covered[rx][next_c] = True
-                                                        table_data[rx][next_c] = ""
+                                                        if next_c < len(table_data[rx]):
+                                                            table_data[rx][next_c] = ""
                                                     
                                                     c_span += 1
                                                     spans[r_idx][col_idx] = (r_span, c_span)
@@ -2040,11 +2261,16 @@ async def convert(
                                             d = cell_drawings.get((r_idx, col_idx))
                                             if d:
                                                 try:
-                                                    cropped = _crop_drawing(pages[i], d.get("bbox"), pad_px=20)
+                                                    cropped = _crop_drawing(pages[i], d.get("bbox"), padding=0.0, pad_px=20)
                                                     if cropped:
-                                                        usable_w_cm = 21.0 - 2.0 * pm
-                                                        col_w_cm = (usable_w_cm / cols) * c_span
-                                                        img_w_cm = max(2.0, min(col_w_cm * 0.85, 5.0 * c_span))
+                                                        # Scale signature based on bbox width if available
+                                                        bbox = d.get("bbox")
+                                                        if bbox and len(bbox) == 4:
+                                                            x1, y1, x2, y2 = [float(v) for v in bbox]
+                                                            img_w_cm = usable_w_cm * (x2 - x1)
+                                                            img_w_cm = max(1.5, min(col_w_cm * 0.85, img_w_cm))
+                                                        else:
+                                                            img_w_cm = max(2.0, min(col_w_cm * 0.85, 5.0 * c_span))
                                                         
                                                         with Image.open(cropped) as ci:
                                                             nat_w, nat_h = ci.size
@@ -2055,20 +2281,48 @@ async def convert(
                                                         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                                                         run = p.add_run()
                                                         run.add_picture(cropped, width=Cm(img_w_cm), height=Cm(img_h_cm))
+                                                        
+                                                        # Render the signee's name text below the signature image
+                                                        if cell_text:
+                                                            p_text = cell.add_paragraph()
+                                                            p_text.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                                                            p_text.paragraph_format.space_before = Pt(4)
+                                                            p_text.paragraph_format.space_after = Pt(2)
+                                                            run_text = p_text.add_run(cell_text)
+                                                            run_text.font.name = font_family if font_family else "Calibri"
+                                                            run_text.font.size = Pt(9)
+                                                            run_text.font.bold = False
                                                 except Exception as e:
                                                     print(f"  [DOCX] Cell drawing failed: {e}")
                                             else:
-                                                cell.text = cell_text
+                                                # Multi-line aware cell text rendering
+                                                cell_lines = cell_text.split("\n") if cell_text else [""]
+                                                # Clear the default empty paragraph
+                                                first_para = cell.paragraphs[0]
                                                 
-                                                # Formatting: center headers, use dynamic font size to prevent overflow
-                                                for paragraph in cell.paragraphs:
-                                                    if r_idx == 0:
-                                                        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                                    for run in paragraph.runs:
-                                                        run.font.name = font_family if font_family else "Calibri"
-                                                        run.font.size = Pt(9.5) if rows > 5 else Pt(11)
-                                                        if r_idx == 0:
-                                                            run.font.bold = True
+                                                # Set cell padding to add visual breathing room
+                                                _set_cell_margins(cell, top_pt=6, bottom_pt=6, left_pt=6, right_pt=6)
+                                                
+                                                # Determine alignment for this column
+                                                col_aligns = el.get("col_alignments") or []
+                                                col_align_str = col_aligns[col_idx] if col_idx < len(col_aligns) else ("center" if r_idx == 0 else "left")
+                                                col_align_enum = ALIGN_MAP.get(col_align_str, WD_ALIGN_PARAGRAPH.LEFT)
+                                                
+                                                cell_font_size = Pt(9.5) if rows > 5 else Pt(11)
+                                                is_header_row = (r_idx == 0)
+                                                
+                                                for li, line_text in enumerate(cell_lines):
+                                                    if li == 0:
+                                                        para = first_para
+                                                    else:
+                                                        para = cell.add_paragraph()
+                                                    para.alignment = WD_ALIGN_PARAGRAPH.CENTER if is_header_row else col_align_enum
+                                                    para.paragraph_format.space_before = Pt(2)
+                                                    para.paragraph_format.space_after = Pt(2)
+                                                    run = para.add_run(line_text)
+                                                    run.font.name = font_family if font_family else "Calibri"
+                                                    run.font.size = cell_font_size
+                                                    run.font.bold = is_header_row
                                 
                                 # Add space after table
                                 doc.add_paragraph().paragraph_format.space_after = Pt(8)
@@ -2180,9 +2434,9 @@ async def convert(
                         if y < margin_pts:
                             c.showPage()
                             y = page_h - margin_pts
-                        tw = c.stringWidth(arrow_char, "Helvetica", fsize_arrow)
+                        tw = c.stringWidth(arrow_char, _PDF_FONT_NORMAL, fsize_arrow)
                         x_arrow = margin_pts + (usable_w - tw) / 2
-                        c.setFont("Helvetica", fsize_arrow)
+                        c.setFont(_PDF_FONT_NORMAL, fsize_arrow)
                         c.drawString(x_arrow, y, arrow_char)
                         y -= fsize_arrow + 6
                         print(f"  [PDF] Arrow element: '{arrow_char}'")
@@ -2197,13 +2451,13 @@ async def convert(
                         if y < margin_pts:
                             c.showPage()
                             y = page_h - margin_pts
-                        tw = c.stringWidth(brk_char, "Helvetica-Bold", fsize_brk)
+                        tw = c.stringWidth(brk_char, _PDF_FONT_BOLD, fsize_brk)
                         # Left bracket aligns left, right bracket aligns right
                         if brk_side == "right":
                             x_brk = margin_pts + usable_w - tw
                         else:
                             x_brk = margin_pts
-                        c.setFont("Helvetica-Bold", fsize_brk)
+                        c.setFont(_PDF_FONT_BOLD, fsize_brk)
                         c.drawString(x_brk, y, brk_char)
                         y -= fsize_brk + 4
                         print(f"  [PDF] Bracket element: '{brk_char}' ({brk_side})")
@@ -2265,20 +2519,22 @@ async def convert(
                     line_x_base = margin_pts + indent + left_i
                     avail_w = usable_w - indent - left_i
 
-                    # Split into wrapped sub-lines
-                    words = txt.split(" ")
+                    # Split into wrapped sub-lines, handling newlines (\n) first
                     wrapped_lines = []
-                    cur_line = ""
-                    for word in words:
-                        test = (cur_line + " " + word).strip()
-                        if c.stringWidth(test, font_name, fsize) <= avail_w:
-                            cur_line = test
-                        else:
-                            if cur_line:
-                                wrapped_lines.append(cur_line)
-                            cur_line = word
-                    if cur_line:
-                        wrapped_lines.append(cur_line)
+                    raw_lines = str(txt).split("\n")
+                    for raw_line in raw_lines:
+                        words = raw_line.split(" ")
+                        cur_line = ""
+                        for word in words:
+                            test = (cur_line + " " + word).strip()
+                            if c.stringWidth(test, font_name, fsize) <= avail_w:
+                                cur_line = test
+                            else:
+                                if cur_line:
+                                    wrapped_lines.append(cur_line)
+                                cur_line = word
+                        if cur_line:
+                            wrapped_lines.append(cur_line)
                     if not wrapped_lines:
                         wrapped_lines = [txt]
 

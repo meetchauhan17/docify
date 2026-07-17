@@ -23,12 +23,14 @@ Docify AI converts scanned handwritten notes, photographic records, and multi-pa
 
 ## Table of Contents
 
+- [What's New](#whats-new)
 - [System Architecture](#system-architecture)
 - [Core Capabilities](#core-capabilities)
 - [Multi-Provider Resilience Framework](#multi-provider-resilience-framework)
 - [Image Preprocessing and OCR Caching](#image-preprocessing-and-ocr-caching)
 - [Pydantic Layout Schema](#pydantic-layout-schema)
 - [Element Mapping and Output Assembly](#element-mapping-and-output-assembly)
+- [PDF and DOCX Parity](#pdf-and-docx-parity)
 - [Technology Stack](#technology-stack)
 - [Directory Structure](#directory-structure)
 - [Installation Guide](#installation-guide)
@@ -41,6 +43,25 @@ Docify AI converts scanned handwritten notes, photographic records, and multi-pa
   - [POST /convert](#post-convert)
 - [Configuration Reference](#configuration-reference)
 - [License](#license)
+
+---
+
+## What's New
+
+### v2.0 — Accuracy & Parity Update
+
+| Area | Improvement |
+| :--- | :--- |
+| **Unicode PDF Font** | PDF now uses **Calibri** (same as DOCX) via ReportLab TTFont registration — Greek letters, math symbols, arrows, subscripts all render correctly |
+| **Math & Equations** | Overhauled OCR prompt explicitly instructs Gemini to transcribe superscripts (`^`), subscripts (`_`), fractions, Greek letters (α β γ Σ …), √ roots, vectors, and matrices |
+| **Table Row Spacing** | Table rows now have a minimum height of **28 pt** with **8–10 pt top/bottom cell padding** — matching the visual line spacing of original notebook pages |
+| **DOCX Multi-line Cells** | Table cells containing `\n` now render each line as a separate Word paragraph with correct spacing and alignment |
+| **Column Alignment** | Gemini now outputs per-column alignment (`col_alignments`), applied to both PDF and DOCX table cells |
+| **Font Size Detection** | Gemini estimates `font_size_pt` per element (16 heading / 13 subhead / 12 body / 10 footnote) — applied in both outputs |
+| **OCR Temperature** | API temperature set to `0.0` for fully deterministic, maximum-accuracy transcription |
+| **PDF Newline Fix** | ReportLab `drawString` no longer receives raw `\n` characters — all text is pre-split into line segments before drawing |
+| **Cell Padding (DOCX)** | Added `tcMar` XML cell margins (6 pt all sides) and `trHeight` minimum row height to DOCX tables |
+| **PDF/DOCX Parity** | PDF and DOCX now use the same font, same font sizes, same column alignment, same row spacing |
 
 ---
 
@@ -59,7 +80,7 @@ flowchart TD
     E --> F[Master API Dispatcher\n_call_vision_api]
     
     F --> G{Gemini Keys Available?}
-    G -- Yes --> H[Call Gemini API\ngemini-2.5-flash / 2.0-flash]
+    G -- Yes --> H[Call Gemini API\ngemini-2.5-flash / 2.0-flash\ntemp=0.0 for max accuracy]
     H --> I{Success?}
     I -- Yes --> V[DocumentLayout JSON]
     I -- No: Quota 429 --> J[Rotate Gemini Key\nRetry up to key count]
@@ -87,11 +108,11 @@ flowchart TD
     
     W --> X[Element Mapping\nrun_ocr_auto]
     X --> Y{Element Type?}
-    Y -- text --> Z[Apply Typography Styles\nHEADING / SUBHEAD / BODY / BULLET / CENTER / UNDERLN]
-    Y -- table --> AA[Verify Cell Dimensions\nResolve Rowspans & Colspans]
+    Y -- text --> Z[Apply Typography Styles\nHEADING / SUBHEAD / BODY / BULLET / CENTER / UNDERLN\nfont_size_pt from model]
+    Y -- table --> AA[Verify Cell Dimensions\nResolve Rowspans & Colspans\nApply col_alignments]
     Y -- drawing --> AB{Visual Shape?}
-    AB -- Arrow --> AC[Render Segoe UI Symbol\nUnicode arrow glyph]
-    AB -- Bracket --> AD[Render Segoe UI Symbol\nUnicode bracket glyph]
+    AB -- Arrow --> AC[Render Unicode arrow glyph\nCalibri font]
+    AB -- Bracket --> AD[Render Unicode bracket glyph\nCalibri font]
     AB -- Sketch --> AE[_crop_drawing\nCrop bounding box to PNG]
     Y -- blank_line --> AF[Insert Paragraph Spacer]
     
@@ -103,8 +124,8 @@ flowchart TD
     AF --> AG
     
     AG --> AH{Selected Format?}
-    AH -- DOCX --> AI[python-docx Generation\nTables, Runs, Inline Pics]
-    AH -- PDF --> AJ[ReportLab Canvas Generation\nWrapped Text, Custom Drawing coordinates]
+    AH -- DOCX --> AI[python-docx Generation\nCalibri font, tcMar padding\ntrHeight minimum row height\nMulti-line cell paragraphs]
+    AH -- PDF --> AJ[ReportLab Canvas Generation\nCalibri TTFont registered\nWrapped Text with \n handling\ncol_alignments applied\n28pt minimum row height]
     
     AI --> AK([Download output.docx])
     AJ --> AL([Download output.pdf])
@@ -119,10 +140,11 @@ flowchart TD
 - **Unified Layout Analysis**: Document layout mapping and handwriting transcription are completed in a single multimodal request, avoiding multiple passes and reducing token fees.
 - **Dynamic Hierarchy Construction**: The model assigns structural tags (HEADING, SUBHEAD, BODY, BULLET, CENTER, UNDERLN) and calculates typographical margins, font scaling, alignments, and spacings.
 - **Refined Text Styling**: Stroke weight, slant, and underline patterns are analyzed at the character run level, applying bold, italic, and underline settings onto the default styles.
-- **Smart Alignment for Math**: Multi-line equations and mathematical expressions are centered and aligned around equality operators using calculated padding spaces.
-- **Structural Table Recreation**: Extracts borderless and grid tables, dynamically merging cell matrices using rowspan/colspan attributes to handle complex structures.
+- **Math & Equation Support**: Superscripts, subscripts, fractions, Greek letters, radical signs, vectors, and matrices are transcribed using Unicode characters — rendered correctly in both PDF and DOCX.
+- **Structural Table Recreation**: Extracts borderless and grid tables, dynamically merging cell matrices using rowspan/colspan attributes. Per-column alignment is detected and applied in both formats.
+- **Notebook Row Spacing**: Tables from handwritten sources use minimum row heights and generous cell padding to match the visual line spacing of the original document.
 - **Embedded Sketch Cropping**: Bounding coordinates for sketches, charts, and signatures are cropped out of the original high-resolution inputs and re-embedded inline in their correct reading order.
-- **Arrow and Bracket Mapping**: Maps simple hand-drawn arrow vectors and enclosing braces directly into scalable Unicode symbols (Segoe UI Symbol), reducing output file size.
+- **Arrow and Bracket Mapping**: Maps simple hand-drawn arrow vectors and enclosing braces directly into scalable Unicode symbols, reducing output file size.
 - **Layout Customization and Overrides**: Provides toggle controls between auto-layout detection and manual typography overrides (font size, style, margins, alignment) via the web client.
 
 ---
@@ -133,6 +155,7 @@ To ensure high availability under resource limits and API rate constraints, Doci
 
 1. **Gemini API (Primary)**:
    - Utilizes `gemini-2.5-flash` for high-speed structured JSON generation using schema validation.
+   - API temperature is set to `0.0` for fully deterministic, maximum-accuracy OCR output.
    - Implements **API Key Rotation**: Accepts a comma-separated list of keys in `GEMINI_API_KEY` and switches to the next key on 429 quota exhaustion.
    - Implements **Model Failover**: Falls back to `gemini-2.0-flash` on prolonged 503 service unavailability.
    - Retries failed requests up to 4 times with exponential backoff delays (4s, 8s, 16s, 32s).
@@ -182,88 +205,36 @@ Gemini responses are validated against a strict Pydantic model configuration:
 
 ```python
 class DocElement(BaseModel):
-    type: str = Field(
-        ...,
-        description="The type of the element. Must be one of: 'text', 'blank_line', 'table', 'drawing'."
-    )
-    text: Optional[str] = Field(
-        None,
-        description="The transcribed text content of the line or paragraph."
-    )
-    tag: Optional[str] = Field(
-        None,
-        description="The formatting tag for text elements: 'HEADING' (major title), 'SUBHEAD' (section label), 'BODY' (normal paragraph), 'BULLET' (list item), 'CENTER' (visually centered line), 'UNDERLN' (underlined text)."
-    )
-    bold: Optional[bool] = Field(
-        None,
-        description="True if the text is bold or written significantly darker than normal."
-    )
-    italic: Optional[bool] = Field(
-        None,
-        description="True if the text is italicized."
-    )
-    underline: Optional[bool] = Field(
-        None,
-        description="True if the text is underlined."
-    )
-    alignment: Optional[str] = Field(
-        None,
-        description="Text alignment: 'left', 'center', 'right', 'justify'."
-    )
-    left_indent_cm: Optional[float] = Field(
-        None,
-        description="Estimated left indentation of the text element in centimeters."
-    )
-    table_data: Optional[List[List[str]]] = Field(
-        None,
-        description="A list of rows representing the cells of the table."
-    )
-    borderless: Optional[bool] = Field(
-        None,
-        description="True if the table is a layout grid and should be rendered without visible borders."
-    )
-    bbox: Optional[List[float]] = Field(
-        None,
-        description="Normalized bounding box [x1, y1, x2, y2] (0.0 to 1.0) of the drawing in the image."
-    )
-    description: Optional[str] = Field(
-        None,
-        description="A brief description of the drawing or diagram."
-    )
-    is_simple_arrow: Optional[bool] = Field(
-        None,
-        description="True if the drawing is just a single plain hand-drawn arrow."
-    )
-    arrow_direction: Optional[str] = Field(
-        None,
-        description="Direction the arrow points: 'right', 'left', 'up', 'down', 'up-right', etc."
-    )
-    is_simple_bracket: Optional[bool] = Field(
-        None,
-        description="True if the drawing is just a single grouping bracket or brace."
-    )
-    bracket_style: Optional[str] = Field(
-        None,
-        description="The style of bracket: 'curly', 'square', 'plain'."
-    )
-    bracket_side: Optional[str] = Field(
-        None,
-        description="Which side the bracket appears relative to the text: 'left', 'right'."
-    )
+    type: str               # 'text', 'blank_line', 'table', 'drawing'
+    text: Optional[str]     # Transcribed text content
+    tag: Optional[str]      # 'HEADING', 'SUBHEAD', 'BODY', 'BULLET', 'CENTER', 'UNDERLN'
+    bold: Optional[bool]
+    italic: Optional[bool]
+    underline: Optional[bool]
+    alignment: Optional[str]        # 'left', 'center', 'right', 'justify'
+    left_indent_cm: Optional[float]
+    font_size_pt: Optional[float]   # Model-estimated font size (16/13/12/10 pt)
+    space_before_pt: Optional[float]
+    space_after_pt: Optional[float]
+
+    # Table fields
+    table_data: Optional[List[List[str]]]   # Rows × columns of cell text
+    borderless: Optional[bool]              # True for layout grids
+    col_alignments: Optional[List[str]]     # Per-column alignment: ['center','left','left',...]
+
+    # Drawing fields
+    bbox: Optional[List[float]]         # Normalized [x1, y1, x2, y2]
+    description: Optional[str]
+    is_simple_arrow: Optional[bool]
+    arrow_direction: Optional[str]      # 'right', 'left', 'up', 'down', etc.
+    is_simple_bracket: Optional[bool]
+    bracket_style: Optional[str]        # 'curly', 'square', 'plain'
+    bracket_side: Optional[str]         # 'left', 'right'
 
 class DocumentLayout(BaseModel):
-    page_margin_cm: float = Field(
-        default=2.54,
-        description="Estimated page margin in centimeters."
-    )
-    line_spacing: float = Field(
-        default=1.15,
-        description="Line spacing multiplier: 1.0, 1.15, 1.5, 2.0."
-    )
-    elements: List[DocElement] = Field(
-        ...,
-        description="The ordered list of all document elements from top to bottom."
-    )
+    page_margin_cm: float = 2.54
+    line_spacing: float = 1.15
+    elements: List[DocElement]
 ```
 
 ---
@@ -280,12 +251,60 @@ The table below outlines the default formatting rules used by the mapping contro
 | `BULLET` | Normal | Normal | 12 pt | Left | 0.5 cm | 0 pt | 3 pt |
 | `CENTER` | Normal | Normal | 12 pt | Center | 0.0 cm | 4 pt | 4 pt |
 | `UNDERLN` | Normal | Normal | 12 pt | Left | 0.0 cm | 0 pt | 3 pt |
-| `TABLE` | Normal | Normal | 11 pt | Left | 0.0 cm | 4 pt | 4 pt |
+| `TABLE` (>5 rows) | Mixed | Normal | 9.5 pt | Per-column | — | — | — |
+| `TABLE` (≤5 rows) | Mixed | Normal | 11 pt | Per-column | — | — | — |
 
 ### Custom Processing Logic
 - **Signature Blocks**: Uses borderless tables with empty headers to place side-by-side signature components next to each other.
 - **Dynamic Text Shrinkage**: Footer notes and metadata blocks are scaled down to 8.5 pt and 9.5 pt dynamically to match professional layouts.
+- **Multi-line Table Cells**: Cell content containing `\n` is split into separate paragraphs/lines — works in both DOCX and PDF.
 - **Double Space Cleanup**: Cleans up multiple spaces and converts them to non-breaking spaces (`\xA0`) to keep formatting aligned.
+
+---
+
+## PDF and DOCX Parity
+
+Docify AI is engineered so that the PDF and DOCX outputs are visually identical. Here's how parity is achieved:
+
+### Font: Calibri in PDF (Unicode TTF)
+
+ReportLab's built-in fonts (Helvetica, Times-Roman) only support Latin-1 characters. Docify AI registers **Calibri** as a Unicode TTF font in ReportLab at startup:
+
+```python
+from reportlab.pdfbase.ttfonts import TTFont
+pdfmetrics.registerFont(TTFont("Calibri",      r"C:\Windows\Fonts\calibri.ttf"))
+pdfmetrics.registerFont(TTFont("Calibri-Bold", r"C:\Windows\Fonts\calibrib.ttf"))
+# ... italic, bolditalic variants
+```
+
+This enables correct rendering of:
+- Greek letters: α β γ δ Σ Π θ λ μ ω
+- Math symbols: √ ∑ ∫ ∂ ≈ ≠ ≤ ≥ × ÷
+- Superscripts / subscripts: x² H₂O
+- Arrows and special punctuation: → ← ↑ ↓ ⟶
+
+Falls back to Arial if Calibri is unavailable, then Helvetica.
+
+### Table Row Spacing Parity
+
+| Setting | DOCX | PDF |
+| :--- | :--- | :--- |
+| Minimum row height | 0.85 cm (`trHeight`) | 28 pt (`MIN_ROW_H`) |
+| Cell top/bottom padding | 6 pt (`tcMar`) | 8–10 pt (`pad_y`) |
+| Cell left/right padding | 6 pt (`tcMar`) | 4–5 pt (`pad_x`) |
+| Font size (dense tables) | 9.5 pt | 9.5 pt |
+| Font size (small tables) | 11 pt | 11 pt |
+
+### Column Alignment Parity
+
+Both DOCX and PDF read `col_alignments` from the Gemini OCR output and apply per-column text alignment:
+
+```
+col_alignments: ["center", "left", "left"]
+```
+
+- Column 0 → center-aligned (e.g., header or index column)
+- Columns 1, 2 → left-aligned
 
 ---
 
@@ -301,6 +320,7 @@ The table below outlines the default formatting rules used by the mapping contro
 | **Image Processing** | Pillow (PIL) | 10.2.0+ | Image sizing, formats, and canvas rendering |
 | **Word Generator** | python-docx | 1.1.0+ | Native XML Word layout builder |
 | **PDF Generator** | ReportLab | 4.1.0+ | Custom coordinates vector canvas generator |
+| **PDF Unicode Font** | TTFont (ReportLab) | Built-in | Calibri/Arial TTF font registration for Unicode |
 | **Data Validation** | Pydantic v2 | 2.6.0+ | JSON layout validation |
 | **Configuration** | python-dotenv | 1.0.0+ | Environment variables loader |
 | **Frontend UI** | HTML5 / CSS3 / JS | Native | Modern dark/light responsive interface |
@@ -529,11 +549,11 @@ else:
 
 Docify AI loads its primary runtime values from the system environment or your local `.env` file:
 
-| Environment Variable | Required | Description |
-| :--- | :---: | :--- |
-| `GEMINI_API_KEY` | Yes | Comma-separated list of Google Gemini API keys. |
-| `GROQ_API_KEY` | No | API Key for backup Llama vision models from Groq. |
-| `OPENROUTER_API_KEY` | No | API Key for backup free vision models from OpenRouter. |
+| Environment Variable | Required | Description                                            |
+| :---------------------| :--------:| :-------------------------------------------------------|
+| `GEMINI_API_KEY`     | Yes      | Comma-separated list of Google Gemini API keys.        |
+| `GROQ_API_KEY`       | No       | API Key for backup Llama vision models from Groq.      |
+| `OPENROUTER_API_KEY` | No       | API Key for backup free vision models from OpenRouter. |
 
 ### Internal System Constants
 These variables can be adjusted directly in `main.py` if needed:
@@ -545,6 +565,7 @@ These variables can be adjusted directly in `main.py` if needed:
 | `UPLOAD_DIR` | `"uploads"` | Folder used to store uploaded files and cropped drawing assets. |
 | `OUTPUT_DIR` | `"outputs"` | Folder where generated Word and PDF files are saved. |
 | `TIMEOUT` | `120,000 ms` | Maximum time allowed per vision API call before timeout. |
+| `API_TEMPERATURE` | `0.0` | OCR generation temperature — 0.0 = fully deterministic, max accuracy. |
 
 ---
 
