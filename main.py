@@ -383,7 +383,7 @@ def _preprocess_for_ocr(img: Image.Image) -> Image.Image:
 # ─────────────────────────────────────────────────────────────
 #  Multi-Provider Vision API — Gemini → Groq → OpenRouter
 # ─────────────────────────────────────────────────────────────
-_PRIMARY_MODEL  = "gemini-2.5-flash"
+_PRIMARY_MODEL  = "gemini-3.5-flash"
 _FALLBACK_MODEL = "gemini-2.0-flash"
 
 # Error patterns that mean "quota/rate-limit" → try next provider
