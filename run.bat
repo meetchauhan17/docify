@@ -8,6 +8,9 @@ echo  [*] Using venv: C:\Meet\python\venv
 echo  [*] Server will start at: http://localhost:8000
 echo.
 
+rem Change to the docify directory (so main.py is always found)
+cd /d "%~dp0"
+
 rem Kill any existing process on port 8000
 powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"
 
