@@ -1202,6 +1202,40 @@ def _crop_drawing(image_path, bbox, padding=0.05, pad_px=0,
         print(f"  _crop_drawing failed: {e}")
         return None
 
+def _sanitize_xml_text(val: str) -> str:
+    if not val:
+        return ""
+    # Filter out control characters that are invalid in XML:
+    # Valid characters: 0x09 (tab), 0x0A (LF), 0x0D (CR), 0x20 to 0xD7FF, 0xE000 to 0xFFFD, 0x10000 to 0x10FFFF
+    return "".join(
+        c for c in val
+        if ord(c) in (0x09, 0x0A, 0x0D) or (0x20 <= ord(c) <= 0xD7FF) or (0xE000 <= ord(c) <= 0xFFFD) or (0x10000 <= ord(c) <= 0x10FFFF)
+    )
+
+def _sanitize_elements(elements):
+    """Sanitize all text fields in all layout elements to ensure XML compatibility."""
+    if not elements:
+        return
+    for el in elements:
+        # Sanitize 'text' field
+        if "text" in el and el["text"]:
+            el["text"] = _sanitize_xml_text(el["text"])
+        
+        # Sanitize 'table_data' field
+        if "data" in el and el["data"]:
+            sanitized_data = []
+            for row in el["data"]:
+                sanitized_row = []
+                for cell in row:
+                    sanitized_row.append(_sanitize_xml_text(cell))
+                sanitized_data.append(sanitized_row)
+            el["data"] = sanitized_data
+            
+        # Sanitize other potential string fields
+        for key in ["description", "bracket_char", "arrow_char"]:
+            if key in el and el[key]:
+                el[key] = _sanitize_xml_text(el[key])
+
 
 # ─────────────────────────────────────────────────
 #  Docx helpers
@@ -2012,6 +2046,8 @@ async def convert(
 
         if use_auto:
             all_data = [run_ocr_auto(p) for p in pages]
+            for elements, _ in all_data:
+                _sanitize_elements(elements)
             has_table = any(any(el.get("type") == "table" for el in elements) for elements, _ in all_data)
             orig_margin = all_data[0][1].get("page_margin_cm", 2.54)
             margin_cm = 1.5 if has_table else orig_margin
@@ -2371,7 +2407,7 @@ async def convert(
             _set_margins(doc, page_margin)
 
             for i, page in enumerate(pages):
-                lines = run_ocr_manual(page)
+                lines = [_sanitize_xml_text(l) for l in run_ocr_manual(page)]
                 if mode == "preserve" and i > 0:
                     doc.add_page_break()
                 if mode == "flow":
@@ -2405,6 +2441,7 @@ async def convert(
         if use_auto:
             for pg_path in pages:
                 elements, meta = run_ocr_auto(pg_path)
+                _sanitize_elements(elements)
                 has_table = any(el.get("type") == "table" for el in elements)
                 margin_cm = 1.5 if has_table else meta.get("page_margin_cm", 2.54)
                 margin_pts = max(28, margin_cm * PT_PER_CM)
@@ -2574,7 +2611,7 @@ async def convert(
             sp_after   = _snap_spacing(para_spacing)
 
             for pg_path in pages:
-                lines = run_ocr_manual(pg_path)
+                lines = [_sanitize_xml_text(l) for l in run_ocr_manual(pg_path)]
                 y     = page_h - margin_pts
 
                 if mode == "flow":
